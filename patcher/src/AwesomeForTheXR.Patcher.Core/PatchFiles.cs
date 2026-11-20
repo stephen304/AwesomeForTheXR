@@ -24,6 +24,25 @@ namespace AwesomeForTheXR.Patcher.Core
             using (var data = File.OpenRead(path)) return Digest(data);
         }
 
+        internal static string OptionalDigest(string path)
+        {
+            if (Directory.Exists(path)) throw new IOException("Expected a file at " + path);
+            return File.Exists(path) ? Digest(path) : null;
+        }
+
+        // Each replace is local to one volume. The transaction journal makes
+        // the pair (assembly + native plugin) recoverable across replacements.
+        internal static void Transition(string path, string before, string after, byte[] contents)
+        {
+            if (OptionalDigest(path) != before)
+                throw new IOException("File changed during the transaction: " + Path.GetFileName(path));
+            if (before == after) return;
+            if (after == null) File.Delete(path);
+            else Publish(path, contents, before != null);
+            if (OptionalDigest(path) != after)
+                throw new IOException("Failed to verify " + Path.GetFileName(path));
+        }
+
         internal static bool IsHash(string hash)
         {
             return hash != null && hash.Length == 64 && Array.TrueForAll(hash.ToCharArray(), Uri.IsHexDigit);
@@ -70,6 +89,7 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(IsRequired = true)] public string OriginalSha256;
         [DataMember(IsRequired = true)] public string InstalledSha256;
         [DataMember(IsRequired = true)] public string Backup;
+        [DataMember(EmitDefaultValue = false)] public string NativeSha256;
     }
 
     // This snapshot is deliberately separate from the immutable original.
@@ -80,13 +100,18 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(IsRequired = true)] public string AfterHash;
         [DataMember(IsRequired = true)] public byte[] PreviousAssembly;
         [DataMember] public byte[] PreviousManifest;
+        [DataMember(EmitDefaultValue = false)] public string BeforeNativeHash;
+        [DataMember(EmitDefaultValue = false)] public string AfterNativeHash;
+        [DataMember(EmitDefaultValue = false)] public byte[] PreviousNative;
     }
 
     internal sealed class InstallPaths
     {
         internal const string Assembly = "Awesome_Data/Managed/Assembly-CSharp.dll";
         internal const string Manifest = "AwesomeForTheXR.manifest.json";
-        internal readonly string Root, Live, Record, Original, OriginalRelative, DirectoryPath, Journal, Lock;
+        internal const string NativeName = "AwesomeForTheXR32.dll";
+        internal const string NativeFile = "Awesome_Data/Plugins/" + NativeName;
+        internal readonly string Root, Live, Native, Record, Original, OriginalRelative, DirectoryPath, Journal, Lock;
 
         internal InstallPaths(string folder, string baseline)
         {
@@ -94,6 +119,7 @@ namespace AwesomeForTheXR.Patcher.Core
                 throw new DirectoryNotFoundException("Select the Awesome game folder.");
             Root = Path.GetFullPath(folder);
             Live = Resolve(Assembly);
+            Native = Resolve(NativeFile);
             Record = Resolve(Manifest);
             // Keep enough path budget for libraries under long Wine/Windows paths.
             // Identity and integrity checks still use the entire SHA-256 digest.

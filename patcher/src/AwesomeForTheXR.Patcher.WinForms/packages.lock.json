@@ -3,7 +3,16 @@
   "dependencies": {
     ".NETFramework,Version=v4.8": {
       "awesomeforthexr.patcher.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Mono.Cecil": "[0.11.6, )"
+        }
+      },
+      "Mono.Cecil": {
+        "type": "CentralTransitive",
+        "requested": "[0.11.6, )",
+        "resolved": "0.11.6",
+        "contentHash": "f33RkDtZO8VlGXCtmQIviOtxgnUdym9xx/b1p9h91CRGOsJFxCFOFK1FDbVt1OCf1aWwYejUFa2MOQyFWTFjbA=="
       }
     },
     ".NETFramework,Version=v4.8/win-x86": {}

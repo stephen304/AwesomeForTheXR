@@ -1,0 +1,3 @@
+LIBRARY AwesomeForTheXR32
+EXPORTS
+    AFTXR_GetMarkerVersion
