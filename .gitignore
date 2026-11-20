@@ -1,0 +1,16 @@
+# Patcher build and test output
+/artifacts/patcher/
+/patcher/**/bin/
+/patcher/**/obj/
+/patcher/**/TestResults/
+/patcher/**/*.trx
+/patcher/**/*.coverage
+/patcher/**/*.coveragexml
+/patcher/**/*.log
+
+# Patcher IDE and user-local state
+/patcher/.vs/
+/patcher/**/*.user
+/patcher/**/*.suo
+/patcher/**/*.rsuser
+/patcher/.nuget/
