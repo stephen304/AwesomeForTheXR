@@ -10,8 +10,9 @@ namespace AwesomeForTheXR.Patcher.Core
     internal static class TestMarkerRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "5C110C333F0DCB3BFEF00CB6C1A0407CF60A50CBFB69D85959B44019F1BF7D69";
-        private const string Badge = "AwesomeForTheXR | native test patch v1";
+        internal const string PatchedHash = "DC11D9F4BE450E6F28EFE9CA4AF5ED54BBEE833192E5E892EC9268D7FA204FE3";
+        private const string VrEnabled = "AwesomeForTheXR | VR mode enabled";
+        private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
         internal static byte[] Rewrite(byte[] original)
@@ -29,9 +30,10 @@ namespace AwesomeForTheXR.Patcher.Core
                     menu.Methods.Any(m => m.Name == "OnGUI"))
                     throw new InvalidDataException("The expected MainMenu component was not found.");
 
-                var awake = menu.Methods.Single(m => m.Name == "Awake" && !m.HasParameters);
-                if (awake.MetadataToken.ToInt32() != 0x060006F6 || !awake.HasBody)
-                    throw new InvalidDataException("The MainMenu initialization method differs from the recipe.");
+                var loader = module.GetType("OculusCheckLoader");
+                var awake = loader?.Methods.SingleOrDefault(m => m.Name == "Awake" && !m.HasParameters);
+                if (awake == null || awake.MetadataToken.ToInt32() != 0x0600042B || !awake.HasBody)
+                    throw new InvalidDataException("The expected VR startup method was not found.");
 
                 // Reuse the references from the game so all injected IL targets its original Mono profile.
                 var rectCtor = ExistingMethod(module, 0x0A00009C,
@@ -39,6 +41,15 @@ namespace AwesomeForTheXR.Patcher.Core
                 var box = ExistingMethod(module, 0x0A000172,
                     "System.Void UnityEngine.GUI::Box(UnityEngine.Rect,System.String)");
                 var log = ExistingMethod(module, 0x0A000033, "System.Void UnityEngine.Debug::Log(System.Object)");
+                var vrEnabled = module.GetType("Options")?.Fields.SingleOrDefault(field =>
+                    field.Name == "isVRSupportEnabled" && field.IsPublic && field.IsStatic &&
+                    field.FieldType.MetadataType == MetadataType.Boolean);
+                if (vrEnabled == null)
+                    throw new InvalidDataException("The game's VR mode field differs from the recipe.");
+                var modeRead = awake.Body.Instructions.SingleOrDefault(i =>
+                    i.OpCode == OpCodes.Ldsfld && i.Operand == vrEnabled && i.Next?.OpCode == OpCodes.Brfalse);
+                if (modeRead == null)
+                    throw new InvalidDataException("The expected VR scene selection was not found.");
 
                 var dll = new ModuleReference("AwesomeForTheXR32");
                 module.ModuleReferences.Add(dll);
@@ -50,12 +61,12 @@ namespace AwesomeForTheXR.Patcher.Core
                     PInvokeInfo = new PInvokeInfo(PInvokeAttributes.CallConvCdecl | PInvokeAttributes.NoMangle,
                         "AFTXR_GetMarkerVersion", dll)
                 };
-                menu.Methods.Add(getVersion);
-                var active = new FieldDefinition("aftxrMarkerActive", FieldAttributes.Private | FieldAttributes.Static,
-                    module.TypeSystem.Boolean);
-                menu.Fields.Add(active);
-                InsertStartupCheck(awake, getVersion, active, log);
-                AddMenuBadge(menu, active, rectCtor, box);
+                loader.Methods.Add(getVersion);
+                var status = new FieldDefinition("aftxrVrStatus", FieldAttributes.Assembly | FieldAttributes.Static,
+                    module.TypeSystem.String);
+                loader.Fields.Add(status);
+                InsertStartupCheck(awake, modeRead.Next, getVersion, status, log);
+                AddMenuBadge(menu, status, rectCtor, box);
 
                 // Pin the PE timestamp so the same source produces the release digest on every install.
                 module.Write(output, new WriterParameters { Timestamp = 0 });
@@ -71,22 +82,27 @@ namespace AwesomeForTheXR.Patcher.Core
             return method;
         }
 
-        private static void InsertStartupCheck(MethodDefinition awake, MethodDefinition getVersion,
-            FieldDefinition active, MethodReference log)
+        private static void InsertStartupCheck(MethodDefinition awake, Instruction sceneBranch,
+            MethodDefinition getVersion, FieldDefinition status, MethodReference log)
         {
             var il = awake.Body.GetILProcessor();
-            var originalStart = awake.Body.Instructions[0];
-            il.InsertBefore(originalStart, il.Create(OpCodes.Call, getVersion));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Ldc_I4_1));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Ceq));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Stsfld, active));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Ldsfld, active));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Brfalse, originalStart));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Ldstr, Badge));
-            il.InsertBefore(originalStart, il.Create(OpCodes.Call, log));
+            var disabled = il.Create(OpCodes.Ldstr, VrDisabled);
+            var storeStatus = il.Create(OpCodes.Stsfld, status);
+            // The game has parsed -vr. Keep its mode on the stack for the original scene branch.
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Call, getVersion));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Ldc_I4_1));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Bne_Un, sceneBranch));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Dup));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Brfalse, disabled));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Ldstr, VrEnabled));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Br, storeStatus));
+            il.InsertBefore(sceneBranch, disabled);
+            il.InsertBefore(sceneBranch, storeStatus);
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Ldsfld, status));
+            il.InsertBefore(sceneBranch, il.Create(OpCodes.Call, log));
         }
 
-        private static void AddMenuBadge(TypeDefinition menu, FieldDefinition active,
+        private static void AddMenuBadge(TypeDefinition menu, FieldDefinition status,
             MethodReference rectCtor, MethodReference box)
         {
             var draw = new MethodDefinition("OnGUI", MethodAttributes.Private | MethodAttributes.HideBySig,
@@ -94,14 +110,14 @@ namespace AwesomeForTheXR.Patcher.Core
             menu.Methods.Add(draw);
             var il = draw.Body.GetILProcessor();
             var done = il.Create(OpCodes.Ret);
-            il.Emit(OpCodes.Ldsfld, active);
+            il.Emit(OpCodes.Ldsfld, status);
             il.Emit(OpCodes.Brfalse, done);
             il.Emit(OpCodes.Ldc_R4, 12f);
             il.Emit(OpCodes.Ldc_R4, 12f);
             il.Emit(OpCodes.Ldc_R4, 300f);
             il.Emit(OpCodes.Ldc_R4, 32f);
             il.Emit(OpCodes.Newobj, rectCtor);
-            il.Emit(OpCodes.Ldstr, Badge);
+            il.Emit(OpCodes.Ldsfld, status);
             il.Emit(OpCodes.Call, box);
             il.Append(done);
         }
