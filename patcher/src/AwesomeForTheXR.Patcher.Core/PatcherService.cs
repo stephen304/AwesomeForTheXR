@@ -109,7 +109,7 @@ namespace AwesomeForTheXR.Patcher.Core
                 return new PatchStatus("Patch package unavailable. " + ex.Message, false, record != null);
             }
             if (record != null && live == desired && native == desiredNative)
-                return new PatchStatus("Files already match this patch.", false, true);
+                return new PatchStatus("Files already match this patch.", canRevert: true, isCurrent: true);
             if (record != null && live != baseline)
                 return new PatchStatus("Files match the previous patch. Update available.", true, true);
             return new PatchStatus("Files match the supported game build.", true, record != null);

@@ -27,14 +27,20 @@ try {
     if ($LASTEXITCODE) { throw 'Managed patcher build failed.' }
 
     $native = Join-Path $root "artifacts/runtime/build/plugin/$Configuration/AwesomeForTheXR32.dll"
-    $gui = Join-Path $root ("artifacts/patcher/bin/AwesomeForTheXR.Patcher.WinForms/" + $Configuration.ToLowerInvariant())
-    $payload = Join-Path $gui 'patch'
-    [IO.Directory]::CreateDirectory($payload) | Out-Null
-    $plugin = Join-Path $payload 'AwesomeForTheXR32.dll'
-    Copy-Item -LiteralPath $native -Destination $plugin -Force
-    $digest = (Get-FileHash -LiteralPath $plugin -Algorithm SHA256).Hash
-    [IO.File]::WriteAllText("$plugin.sha256", $digest, [Text.Encoding]::ASCII)
-    Write-Output (Join-Path $gui 'AwesomeForTheXR-Patcher.exe')
+    $digest = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash
+    $executables = [ordered]@{
+        WinForms = 'AwesomeForTheXR-Patcher.exe'
+        Cli = 'AwesomeForTheXR-Patcher.Cli.exe'
+    }
+    foreach ($frontend in $executables.Keys) {
+        $output = Join-Path $root ("artifacts/patcher/bin/AwesomeForTheXR.Patcher.$frontend/" + $Configuration.ToLowerInvariant())
+        $payload = Join-Path $output 'patch'
+        [IO.Directory]::CreateDirectory($payload) | Out-Null
+        $plugin = Join-Path $payload 'AwesomeForTheXR32.dll'
+        Copy-Item -LiteralPath $native -Destination $plugin -Force
+        [IO.File]::WriteAllText("$plugin.sha256", $digest, [Text.Encoding]::ASCII)
+        Write-Output (Join-Path $output $executables[$frontend])
+    }
 } finally {
     Pop-Location
 }

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>AwesomeForTheXR-Patcher.Cli</AssemblyName>
+    <RootNamespace>AwesomeForTheXR.Patcher.Cli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\GameDiscovery.cs" Link="GameDiscovery.cs" />
+    <ProjectReference Include="..\AwesomeForTheXR.Patcher.Core\AwesomeForTheXR.Patcher.Core.csproj" />
+  </ItemGroup>
+</Project>

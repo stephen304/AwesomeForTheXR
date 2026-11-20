@@ -6,7 +6,7 @@ using System.Security;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
-namespace AwesomeForTheXR.Patcher.WinForms
+namespace AwesomeForTheXR.Patcher
 {
     internal static class GameDiscovery
     {

@@ -6,6 +6,7 @@
     <RootNamespace>AwesomeForTheXR.Patcher.WinForms</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\Shared\GameDiscovery.cs" Link="GameDiscovery.cs" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
     <ProjectReference Include="..\AwesomeForTheXR.Patcher.Core\AwesomeForTheXR.Patcher.Core.csproj" />
