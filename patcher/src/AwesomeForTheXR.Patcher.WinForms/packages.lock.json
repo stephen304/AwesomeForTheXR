@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dependencies": {
+    ".NETFramework,Version=v4.8": {
+      "awesomeforthexr.patcher.core": {
+        "type": "Project"
+      }
+    },
+    ".NETFramework,Version=v4.8/win-x86": {}
+  }
+}

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>AwesomeForTheXR-Patcher</AssemblyName>
+    <RootNamespace>AwesomeForTheXR.Patcher.WinForms</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <ProjectReference Include="..\AwesomeForTheXR.Patcher.Core\AwesomeForTheXR.Patcher.Core.csproj" />
+  </ItemGroup>
+</Project>
