@@ -13,9 +13,11 @@ This project aims to patch in support for modern VR/XR runtimes in order to pres
 ## Quick Start
 
 1. Clone the repo and run `Build.ps1`, or download the latest release zip.
-2. With the game closed, run `Patch.ps1`, or unzip the release and open the patcher app.
+2. With the game closed, run `Patch.ps1`, or unzip the release and open `AwesomePatcher.exe`.
 3. Press `Y` to confirm patching or click the Patch button in the patcher GUI.
 4. Run the game from steam using any of the 4 VR launch options
+
+The same executable accepts `verify`, `patch`, and `revert` in a terminal. Run `AwesomePatcher.exe --help` for options.
 
 ## Features
 

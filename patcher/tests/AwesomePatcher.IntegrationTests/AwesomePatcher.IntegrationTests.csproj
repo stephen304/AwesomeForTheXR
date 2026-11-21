@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AwesomePatcher.Core/AwesomePatcher.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/AwesomePatcher.Core/PointerTemplate/PointerButtons.cs" Link="PointerButtons.cs" />
+    <Compile Include="../../src/AwesomePatcher.Core/PointerTemplate/PointerMouse.cs" Link="PointerMouse.cs" />
+  </ItemGroup>
+</Project>

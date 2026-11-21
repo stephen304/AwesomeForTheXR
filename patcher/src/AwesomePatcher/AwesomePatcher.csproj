@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>AwesomePatcher</AssemblyName>
+    <RootNamespace>AwesomePatcher</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\runtime\plugin\OpenXR-LICENSE.txt" LogicalName="OpenXR-LICENSE.txt" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <ProjectReference Include="..\AwesomePatcher.Core\AwesomePatcher.Core.csproj" />
+  </ItemGroup>
+</Project>

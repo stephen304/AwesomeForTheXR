@@ -23,7 +23,7 @@ try {
     if ($LASTEXITCODE) { throw 'Native patch configuration failed.' }
     & $cmakeExe --build artifacts/runtime/build --config $Configuration --target AwesomeForTheXR32 AwesomeDirectForwarder AwesomeStartup
     if ($LASTEXITCODE) { throw 'Native patch build failed.' }
-    & dotnet build patcher/AwesomeForTheXR.Patcher.sln --configuration $Configuration -p:RestoreLockedMode=true
+    & dotnet build patcher/AwesomePatcher.sln --configuration $Configuration -p:RestoreLockedMode=true
     if ($LASTEXITCODE) { throw 'Managed patcher build failed.' }
 
     $native = Join-Path $root "artifacts/runtime/build/plugin/$Configuration/AwesomeForTheXR32.dll"
@@ -32,24 +32,16 @@ try {
     $startupDir = Join-Path $root "artifacts/runtime/build/startup/$Configuration"
     $startup = Join-Path $startupDir 'AwesomeStartup.bin'
     & (Join-Path $root 'runtime/startup/Export-Startup.ps1') -Image (Join-Path $startupDir 'AwesomeStartup.exe') -Output $startup
-    $executables = [ordered]@{
-        WinForms = 'AwesomeForTheXR-Patcher.exe'
-        Cli = 'AwesomeForTheXR-Patcher.Cli.exe'
+    $output = Join-Path $root ('artifacts/patcher/bin/AwesomePatcher/' + $Configuration.ToLowerInvariant())
+    $payload = Join-Path $output 'patch'
+    [IO.Directory]::CreateDirectory($payload) | Out-Null
+    foreach ($source in @($native, $forwarder, $startup, $loader)) {
+        $destination = Join-Path $payload ([IO.Path]::GetFileName($source))
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+        $digest = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+        [IO.File]::WriteAllText("$destination.sha256", $digest, [Text.Encoding]::ASCII)
     }
-    foreach ($frontend in $executables.Keys) {
-        $output = Join-Path $root ("artifacts/patcher/bin/AwesomeForTheXR.Patcher.$frontend/" + $Configuration.ToLowerInvariant())
-        $payload = Join-Path $output 'patch'
-        [IO.Directory]::CreateDirectory($payload) | Out-Null
-        # Earlier builds placed the notice here. Both executables now embed it.
-        [IO.File]::Delete((Join-Path $output 'OpenXR-LICENSE.txt'))
-        foreach ($source in @($native, $forwarder, $startup, $loader)) {
-            $destination = Join-Path $payload ([IO.Path]::GetFileName($source))
-            Copy-Item -LiteralPath $source -Destination $destination -Force
-            $digest = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
-            [IO.File]::WriteAllText("$destination.sha256", $digest, [Text.Encoding]::ASCII)
-        }
-        Write-Output (Join-Path $output $executables[$frontend])
-    }
+    Write-Output (Join-Path $output 'AwesomePatcher.exe')
 } finally {
     Pop-Location
 }

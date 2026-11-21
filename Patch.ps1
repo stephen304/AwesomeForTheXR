@@ -10,9 +10,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$output = Join-Path $PSScriptRoot 'artifacts/patcher/bin/AwesomeForTheXR.Patcher.Cli'
-$cli = Join-Path $output ($Configuration.ToLowerInvariant() + '/AwesomeForTheXR-Patcher.Cli.exe')
-if (!(Test-Path -LiteralPath $cli -PathType Leaf)) {
+$output = Join-Path $PSScriptRoot 'artifacts/patcher/bin/AwesomePatcher'
+$patcher = Join-Path $output ($Configuration.ToLowerInvariant() + '/AwesomePatcher.exe')
+if (!(Test-Path -LiteralPath $patcher -PathType Leaf)) {
     throw "Build the patcher first with .\Build.ps1 -Configuration $Configuration."
 }
 
@@ -22,5 +22,5 @@ if ($PSBoundParameters.ContainsKey('GameFolder')) {
 }
 if ($y) { $arguments += '-y' }
 
-& $cli @arguments
+& $patcher @arguments
 exit $LASTEXITCODE
