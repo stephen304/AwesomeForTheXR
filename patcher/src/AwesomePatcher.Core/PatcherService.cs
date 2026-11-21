@@ -16,17 +16,22 @@ namespace AwesomePatcher.Core
         private readonly IArtworkCatalog artworkCatalog;
         private static LauncherFile Player(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Player, PlayerRecipe.PlayerOriginal);
         private static LauncherFile Forwarder(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Helper, PlayerRecipe.HelperOriginal);
-        private readonly string baseline, desired, nativePackageDirectory;
+        private readonly string baseline, desired;
+        private readonly Func<string, Stream> openPackageFile;
         private readonly Func<byte[], byte[]> rewrite;
 
         // A recipe is compiled code with fixed source and output digests. The
         // scaffold's synthetic recipes use this seam without shipping game data.
         public PatcherService(string originalAssemblySha256, string expectedPatchedAssemblySha256,
             Func<byte[], byte[]> rewriteOriginal)
-            : this(originalAssemblySha256, expectedPatchedAssemblySha256, rewriteOriginal, null) { }
+            : this(originalAssemblySha256, expectedPatchedAssemblySha256, rewriteOriginal, (string)null) { }
 
         public PatcherService(string originalAssemblySha256, string expectedPatchedAssemblySha256,
             Func<byte[], byte[]> rewriteOriginal, string nativePackageDirectory)
+            : this(originalAssemblySha256, expectedPatchedAssemblySha256, rewriteOriginal, FromDirectory(nativePackageDirectory)) { }
+
+        private PatcherService(string originalAssemblySha256, string expectedPatchedAssemblySha256,
+            Func<byte[], byte[]> rewriteOriginal, Func<string, Stream> openPackageFile)
         {
             if (!PatchFiles.IsHash(originalAssemblySha256))
                 throw new ArgumentException("The original SHA-256 is invalid.", nameof(originalAssemblySha256));
@@ -36,12 +41,26 @@ namespace AwesomePatcher.Core
             baseline = originalAssemblySha256.ToUpperInvariant();
             desired = expectedPatchedAssemblySha256?.ToUpperInvariant();
             rewrite = rewriteOriginal;
-            this.nativePackageDirectory = nativePackageDirectory;
+            this.openPackageFile = openPackageFile;
         }
 
-        internal PatcherService(string packageDirectory, IArtworkCatalog artworkCatalog) : this(
+        private static Func<string, Stream> FromDirectory(string directory)
+        {
+            if (directory == null) return null;
+            return name =>
+            {
+                string path = Path.Combine(directory, name);
+                RequireFile(path, name);
+                return File.OpenRead(path);
+            };
+        }
+
+        internal PatcherService(string packageDirectory, IArtworkCatalog artworkCatalog)
+            : this(FromDirectory(packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory))), artworkCatalog) { }
+
+        private PatcherService(Func<string, Stream> openPackageFile, IArtworkCatalog artworkCatalog) : this(
             GameAssemblyRecipe.OriginalHash, GameAssemblyRecipe.PatchedHash, GameAssemblyRecipe.Rewrite,
-            packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory)))
+            openPackageFile ?? throw new ArgumentNullException(nameof(openPackageFile)))
         {
             hasLaunchers = true;
             this.artworkCatalog = artworkCatalog ?? throw new ArgumentNullException(nameof(artworkCatalog));
@@ -50,6 +69,9 @@ namespace AwesomePatcher.Core
         public static PatcherService ForGame() => ForGame(Path.Combine(AppContext.BaseDirectory, "patch"));
 
         public static PatcherService ForGame(string nativePackageDirectory) => new PatcherService(nativePackageDirectory, new SteamVrCatalog());
+
+        public static PatcherService ForGamePackage(Func<string, Stream> openPackageFile) =>
+            new PatcherService(openPackageFile, new SteamVrCatalog());
 
         public PatchStatus Inspect(string folder)
         {
@@ -167,12 +189,16 @@ namespace AwesomePatcher.Core
         private byte[] ReadPackage(string name, out string digest)
         {
             digest = null;
-            if (nativePackageDirectory == null) return null;
-            string file = Path.Combine(nativePackageDirectory, name);
-            RequireFile(file, name);
-            RequireFile(file + ".sha256", name + ".sha256");
-            digest = File.ReadAllText(file + ".sha256").Trim().ToUpperInvariant();
-            byte[] bytes = File.ReadAllBytes(file);
+            if (openPackageFile == null) return null;
+            using (var reader = new StreamReader(openPackageFile(name + ".sha256")))
+                digest = reader.ReadToEnd().Trim().ToUpperInvariant();
+            byte[] bytes;
+            using (var source = openPackageFile(name))
+            using (var buffer = new MemoryStream())
+            {
+                source.CopyTo(buffer);
+                bytes = buffer.ToArray();
+            }
             if (bytes.Length == 0 || !PatchFiles.IsHash(digest) || PatchFiles.Digest(bytes) != digest)
                 throw new InvalidDataException("Packaged file failed its SHA-256 check: " + name);
             return bytes;

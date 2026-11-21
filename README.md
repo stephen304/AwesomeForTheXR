@@ -12,10 +12,19 @@ This project aims to patch in support for modern VR/XR runtimes in order to pres
 
 ## Quick Start
 
-1. Clone the repo and run `Build.ps1`, or download the latest release zip.
-2. With the game closed, run `Patch.ps1`, or unzip the release and open `AwesomePatcher.exe`.
-3. Press `Y` to confirm patching or click the Patch button in the patcher GUI.
-4. Run the game from steam using any of the 4 VR launch options
+1. Download the latest release zip.
+2. With the game closed, run `AwesomePatcher.exe`.
+3. Confirm the game location and click the Patch button.
+4. Run the game from steam using any of the 4 VR launch options.
+
+## Building from Source / Development
+
+1. Clone the repo and run `Build.ps1`
+2. Run `Patch.ps1`
+3. Confirm the game location and click the Patch button.
+4. Run the game using any VR launch option.
+
+To package a single executable patcher after building it, run `Package.ps1` from the repository root. It writes `artifacts/release/AwesomePatcher.exe`. The patcher targets .NET Framework 4.8.
 
 The same executable accepts `verify`, `patch`, and `revert` in a terminal. Run `AwesomePatcher.exe --help` for options.
 

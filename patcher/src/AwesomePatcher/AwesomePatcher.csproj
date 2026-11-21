@@ -7,6 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\runtime\plugin\OpenXR-LICENSE.txt" LogicalName="OpenXR-LICENSE.txt" />
+    <EmbeddedResource Include="..\..\..\LICENSE.txt" LogicalName="LICENSE.txt" />
+    <EmbeddedResource Include="Mono.Cecil-LICENSE.txt" LogicalName="Mono.Cecil-LICENSE.txt" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
     <ProjectReference Include="..\AwesomePatcher.Core\AwesomePatcher.Core.csproj" />

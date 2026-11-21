@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using AwesomePatcher.Core;
 
 namespace AwesomePatcher
 {
@@ -9,7 +8,7 @@ namespace AwesomePatcher
         private static readonly string Usage =
             "Usage: AwesomePatcher.exe [GAME_FOLDER]" + Environment.NewLine +
             "       AwesomePatcher.exe <verify|patch|revert> [--game-dir PATH] [-y]" + Environment.NewLine +
-            "       AwesomePatcher.exe --help | --openxr-license";
+            "       AwesomePatcher.exe --help | --openxr-license | --licenses";
 
         internal static bool IsCommand(string value) => value == "verify" || value == "patch" || value == "revert";
 
@@ -18,6 +17,11 @@ namespace AwesomePatcher
             if (args.Length == 1 && args[0] == "--openxr-license")
             {
                 Console.Write(OpenXRLicense.ReadText());
+                return 0;
+            }
+            if (args.Length == 1 && args[0] == "--licenses")
+            {
+                Console.Write(OpenXRLicense.ReadAllNotices());
                 return 0;
             }
             if (args.Length == 1 && args[0] == "--help")
@@ -81,7 +85,7 @@ namespace AwesomePatcher
                 }
             }
 
-            var service = PatcherService.ForGame();
+            var service = PackagePayload.CreateService();
             var status = service.Inspect(folder);
             Console.WriteLine(status.Message);
             if (command == "verify")

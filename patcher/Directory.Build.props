@@ -6,6 +6,7 @@
     <VSTestResultsDirectory>$(ArtifactsPath)test-results\$(MSBuildProjectName)\</VSTestResultsDirectory>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Deterministic>true</Deterministic>
+    <PathMap Condition="'$(Configuration)' == 'Release'">$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..').Replace(',', ',,').Replace('=', '=='))=/_/AwesomeForTheXR/</PathMap>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 </Project>

@@ -1,5 +1,6 @@
 # Patcher build and test output
 /artifacts/patcher/
+/artifacts/release/
 /artifacts/runtime/
 /patcher/**/bin/
 /patcher/**/obj/

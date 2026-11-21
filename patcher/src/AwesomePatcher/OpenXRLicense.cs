@@ -5,10 +5,17 @@ namespace AwesomePatcher
 {
     internal static class OpenXRLicense
     {
-        internal static string ReadText()
+        internal static string ReadText() => ReadResource("OpenXR-LICENSE.txt");
+
+        internal static string ReadAllNotices() =>
+            "AwesomeForTheXR" + Environment.NewLine + ReadResource("LICENSE.txt") + Environment.NewLine +
+            "Mono.Cecil" + Environment.NewLine + ReadResource("Mono.Cecil-LICENSE.txt") + Environment.NewLine +
+            "OpenXR" + Environment.NewLine + ReadText();
+
+        private static string ReadResource(string name)
         {
-            var stream = typeof(OpenXRLicense).Assembly.GetManifestResourceStream("OpenXR-LICENSE.txt")
-                ?? throw new InvalidOperationException("The embedded OpenXR license is missing.");
+            var stream = typeof(OpenXRLicense).Assembly.GetManifestResourceStream(name)
+                ?? throw new InvalidOperationException("Missing embedded notice: " + name);
             using (var reader = new StreamReader(stream))
                 return reader.ReadToEnd();
         }

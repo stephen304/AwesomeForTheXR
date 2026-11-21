@@ -68,7 +68,8 @@ namespace AwesomePatcher
             Controls.Add(layout);
 
             var about = new ToolStripMenuItem("&About");
-            about.DropDownItems.Add("&OpenXR License", null, (sender, e) => ShowOpenXRLicense());
+            about.DropDownItems.Add("&OpenXR License", null, (sender, e) => ShowLicense("OpenXR License", OpenXRLicense.ReadText()));
+            about.DropDownItems.Add("&Licenses", null, (sender, e) => ShowLicense("Licenses", OpenXRLicense.ReadAllNotices()));
             MainMenuStrip = new MenuStrip();
             MainMenuStrip.Items.Add(about);
             Controls.Add(MainMenuStrip);
@@ -109,11 +110,11 @@ namespace AwesomePatcher
                 folder.Text = selectedFolder;
         }
 
-        private void ShowOpenXRLicense()
+        private void ShowLicense(string title, string text)
         {
             using (var dialog = new Form
             {
-                Text = "OpenXR License",
+                Text = title,
                 Font = Font,
                 AutoScaleMode = AutoScaleMode.Font,
                 ClientSize = new Size(740, 480),
@@ -125,13 +126,13 @@ namespace AwesomePatcher
             {
                 var notice = new TextBox
                 {
-                    AccessibleName = "OpenXR license text",
+                    AccessibleName = title,
                     Multiline = true,
                     ReadOnly = true,
                     WordWrap = false,
                     ScrollBars = ScrollBars.Both,
                     Dock = DockStyle.Fill,
-                    Text = OpenXRLicense.ReadText().Replace("\r\n", "\n").Replace("\n", Environment.NewLine)
+                    Text = text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine)
                 };
                 var close = new Button { Text = "&Close", AutoSize = true, DialogResult = DialogResult.Cancel };
                 var buttons = new FlowLayoutPanel

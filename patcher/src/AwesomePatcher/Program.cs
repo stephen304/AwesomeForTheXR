@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
-using AwesomePatcher.Core;
 
 namespace AwesomePatcher
 {
@@ -28,7 +27,7 @@ namespace AwesomePatcher
             FreeConsole();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(PatcherService.ForGame(), selectedFolder));
+            Application.Run(new MainForm(PackagePayload.CreateService(), selectedFolder));
             return 0;
         }
     }
