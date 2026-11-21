@@ -94,6 +94,7 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(EmitDefaultValue = false)] public string ForwarderSha256;
         [DataMember(EmitDefaultValue = false)] public string StartupSha256;
         [DataMember(EmitDefaultValue = false)] public string LoaderSha256;
+        [DataMember(EmitDefaultValue = false)] public string ArtworkSha256;
     }
 
     // This snapshot is deliberately separate from the immutable original.
@@ -112,6 +113,7 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(EmitDefaultValue = false)] public string BeforeLoaderHash;
         [DataMember(EmitDefaultValue = false)] public string AfterLoaderHash;
         [DataMember(EmitDefaultValue = false)] public byte[] PreviousLoader;
+        [DataMember(EmitDefaultValue = false)] public SteamVrArtwork Artwork;
     }
 
     internal sealed class InstallPaths

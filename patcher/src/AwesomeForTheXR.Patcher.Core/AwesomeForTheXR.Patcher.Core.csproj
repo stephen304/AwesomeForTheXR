@@ -3,6 +3,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="AwesomeForTheXR.vrmanifest" LogicalName="AwesomeForTheXR.vrmanifest" />
     <PackageReference Include="Mono.Cecil" />
   </ItemGroup>
 </Project>

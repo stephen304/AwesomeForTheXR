@@ -89,7 +89,7 @@ namespace AwesomeForTheXR.Patcher.Cli
                 if (status.IsCurrent) return 0;
                 if (!status.CanPatch) return 1;
                 service.Patch(folder);
-                Console.WriteLine("Patch applied.");
+                Console.WriteLine("Patch applied. " + service.Inspect(folder).Message);
             }
             else
             {

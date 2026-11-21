@@ -11,7 +11,9 @@ namespace AwesomeForTheXR.Patcher.Core
         private const string NativePluginFormat = "AwesomeForTheXR/marker-install/2";
         private const string LauncherFormat = "AwesomeForTheXR/launcher-install/3";
         private const string OpenXRFormat = "AwesomeForTheXR/openxr-install/4";
+        private const string ArtworkFormat = "AwesomeForTheXR/openxr-install/5";
         private readonly bool hasLaunchers;
+        private readonly IArtworkCatalog artworkCatalog;
         private static LauncherFile Player(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Player, PlayerRecipe.PlayerOriginal);
         private static LauncherFile Forwarder(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Helper, PlayerRecipe.HelperOriginal);
         private readonly string baseline, desired, nativePackageDirectory;
@@ -37,16 +39,17 @@ namespace AwesomeForTheXR.Patcher.Core
             this.nativePackageDirectory = nativePackageDirectory;
         }
 
-        private PatcherService(string packageDirectory) : this(
+        internal PatcherService(string packageDirectory, IArtworkCatalog artworkCatalog) : this(
             GameAssemblyRecipe.OriginalHash, GameAssemblyRecipe.PatchedHash, GameAssemblyRecipe.Rewrite,
             packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory)))
         {
             hasLaunchers = true;
+            this.artworkCatalog = artworkCatalog ?? throw new ArgumentNullException(nameof(artworkCatalog));
         }
 
         public static PatcherService ForGame() => ForGame(Path.Combine(AppContext.BaseDirectory, "patch"));
 
-        public static PatcherService ForGame(string nativePackageDirectory) => new PatcherService(nativePackageDirectory);
+        public static PatcherService ForGame(string nativePackageDirectory) => new PatcherService(nativePackageDirectory, new SteamVrCatalog());
 
         public PatchStatus Inspect(string folder)
         {
@@ -88,6 +91,7 @@ namespace AwesomeForTheXR.Patcher.Core
             string loader = hasLaunchers ? PatchFiles.OptionalDigest(paths.Resolve(InstallPaths.LoaderName)) : null;
             if (!interrupted && loader != record?.LoaderSha256)
                 throw new InvalidDataException("Unrecognized, missing or modified OpenXR loader: " + InstallPaths.LoaderName);
+            if (hasLaunchers && !interrupted) SteamVrArtwork.VerifyFile(paths, record);
             if (interrupted) ReadJournal(paths, live, native, record);
             else
             {
@@ -121,7 +125,10 @@ namespace AwesomeForTheXR.Patcher.Core
                 return new PatchStatus("Patch package unavailable. " + ex.Message, false, record != null);
             }
             if (record != null && live == desired && native == desiredNative && launchersCurrent)
+            {
+                if (hasLaunchers) return SteamVrArtwork.InstalledStatus(paths, record, artworkCatalog);
                 return new PatchStatus("Files already match this patch.", canRevert: true, isCurrent: true);
+            }
             if (record != null && live != baseline)
                 return new PatchStatus("Files match the previous patch. Update available.", true, true);
             return new PatchStatus("Files match the supported game build.", true, record != null);
@@ -181,10 +188,11 @@ namespace AwesomeForTheXR.Patcher.Core
                 ((r.Format == AssemblyOnlyFormat && r.NativeSha256 == null) ||
                  (r.Format == NativePluginFormat && PatchFiles.IsHash(r.NativeSha256)));
             bool launcherVersion = (r.Format == LauncherFormat && r.LoaderSha256 == null) ||
-                (r.Format == OpenXRFormat && PatchFiles.IsHash(r.LoaderSha256));
+                ((r.Format == OpenXRFormat || r.Format == ArtworkFormat) && PatchFiles.IsHash(r.LoaderSha256));
             bool launchers = hasLaunchers && launcherVersion && PatchFiles.IsHash(r.NativeSha256) &&
                 PatchFiles.IsHash(r.PlayerSha256) && PatchFiles.IsHash(r.ForwarderSha256) && PatchFiles.IsHash(r.StartupSha256);
-            if (!legacy && !launchers)
+            bool validArtwork = r.Format == ArtworkFormat ? PatchFiles.IsHash(r.ArtworkSha256) : r.ArtworkSha256 == null;
+            if ((!legacy && !launchers) || !validArtwork)
                 throw new InvalidDataException("Unrecognized installation manifest version or payload hash.");
             return r;
         }
@@ -207,6 +215,7 @@ namespace AwesomeForTheXR.Patcher.Core
                 throw new InvalidDataException("Interrupted update conflicts with the native plugin.");
             if (hasLaunchers)
             {
+                j.Artwork?.Verify(paths, old);
                 string loader = PatchFiles.OptionalDigest(paths.Resolve(InstallPaths.LoaderName));
                 bool savedLoader = j.BeforeLoaderHash != j.AfterLoaderHash && j.BeforeLoaderHash != null;
                 if (j.BeforeLoaderHash != old?.LoaderSha256 ||
@@ -218,9 +227,10 @@ namespace AwesomeForTheXR.Patcher.Core
             }
             bool currentIsOld = current?.InstalledSha256 == old?.InstalledSha256 && current?.NativeSha256 == old?.NativeSha256 &&
                 current?.PlayerSha256 == old?.PlayerSha256 && current?.ForwarderSha256 == old?.ForwarderSha256 &&
-                current?.StartupSha256 == old?.StartupSha256 && current?.LoaderSha256 == old?.LoaderSha256;
+                current?.StartupSha256 == old?.StartupSha256 && current?.LoaderSha256 == old?.LoaderSha256 &&
+                current?.ArtworkSha256 == old?.ArtworkSha256;
             bool currentIsNew = (current?.InstalledSha256 ?? baseline) == j.AfterHash && current?.NativeSha256 == j.AfterNativeHash &&
-                current?.LoaderSha256 == j.AfterLoaderHash;
+                current?.LoaderSha256 == j.AfterLoaderHash && current?.ArtworkSha256 == j.Artwork?.After;
             if ((j.BeforeHash != baseline && j.BeforeHash != old?.InstalledSha256) || (!currentIsOld && !currentIsNew))
                 throw new InvalidDataException("Interrupted update conflicts with the installation manifest.");
             if (hasLaunchers)
@@ -302,9 +312,10 @@ namespace AwesomeForTheXR.Patcher.Core
                     forwarderChange = Forwarder(paths).Prepare(current?.ForwarderSha256, forwarderBytes);
                 }
 
+                var artwork = hasLaunchers ? SteamVrArtwork.Prepare(paths, current, revert, artworkCatalog) : null;
                 var transaction = new PendingWrite
                 {
-                    Player = playerChange, Forwarder = forwarderChange,
+                    Artwork = artwork, Player = playerChange, Forwarder = forwarderChange,
                     BeforeHash = beforeHash,
                     AfterHash = afterHash,
                     PreviousLoader = previousLoader, BeforeLoaderHash = beforeLoaderHash, AfterLoaderHash = afterLoaderHash,
@@ -329,10 +340,11 @@ namespace AwesomeForTheXR.Patcher.Core
                     }
                     if (revert) PatchFiles.Transition(paths.Native, beforeNativeHash, null, null);
                     if (revert && hasLaunchers) PatchFiles.Transition(loaderPath, beforeLoaderHash, null, null);
+                    artwork?.Apply(paths, artworkCatalog);
                     if (revert) File.Delete(paths.Record);
                     else
                     {
-                        var record = new InstallRecord { LoaderSha256 = afterLoaderHash, Format = hasLaunchers ? OpenXRFormat : afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
+                        var record = new InstallRecord { ArtworkSha256 = artwork?.After, LoaderSha256 = afterLoaderHash, Format = hasLaunchers ? ArtworkFormat : afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
                             PlayerSha256 = playerChange?.After, ForwarderSha256 = forwarderChange?.After, StartupSha256 = startupHash,
                             NativeSha256 = afterNativeHash, OriginalSha256 = baseline,
                             InstalledSha256 = afterHash, Backup = paths.OriginalRelative };
@@ -367,6 +379,7 @@ namespace AwesomeForTheXR.Patcher.Core
             var j = ReadJournal(paths, live, native, ReadRecord(paths));
             if (hasLaunchers)
             {
+                j.Artwork?.Undo(paths, artworkCatalog);
                 var loaderPath = paths.Resolve(InstallPaths.LoaderName);
                 string loader = PatchFiles.OptionalDigest(loaderPath);
                 if (loader != j.BeforeLoaderHash)

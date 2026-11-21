@@ -24,6 +24,7 @@ extern "C" void __cdecl BindPreflightFixture(Fixture* fixture) { state = fixture
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateInstance(const XrInstanceCreateInfo* info, XrInstance* out) {
     ++state->creates;
     expect(info->type == XR_TYPE_INSTANCE_CREATE_INFO && !info->next && !info->enabledApiLayerCount &&
+           std::strcmp(info->applicationInfo.applicationName, "AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome") == 0 &&
            info->applicationInfo.apiVersion == XR_MAKE_VERSION(1, 0, 0) &&
            info->enabledExtensionCount == 1 &&
            std::strcmp(info->enabledExtensionNames[0], XR_KHR_D3D11_ENABLE_EXTENSION_NAME) == 0);

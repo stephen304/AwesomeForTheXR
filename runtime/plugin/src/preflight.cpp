@@ -148,7 +148,7 @@ bool discover(const std::wstring& directory, FILE* log) {
 
     const char* extension = XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
     XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
-    strcpy_s(info.applicationInfo.applicationName, "AwesomeForTheXR");
+    strcpy_s(info.applicationInfo.applicationName, "AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome");
     info.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     info.enabledExtensionCount = 1;
     info.enabledExtensionNames = &extension;

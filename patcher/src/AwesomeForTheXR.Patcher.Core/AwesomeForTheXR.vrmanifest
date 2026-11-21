@@ -1,0 +1,14 @@
+{
+  "applications": [
+    {
+      "app_key": "steam.app.15560",
+      "launch_type": "url",
+      "url": "steam://rungameid/15560",
+      "image_path": "https://shared.steamstatic.com/store_item_assets/steam/apps/15560/header.jpg",
+      "image_path_capsule": "https://shared.steamstatic.com/store_item_assets/steam/apps/15560/library_600x900.jpg",
+      "strings": {
+        "en_us": { "name": "AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome" }
+      }
+    }
+  ]
+}

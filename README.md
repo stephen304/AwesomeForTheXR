@@ -22,6 +22,7 @@ This project aims to patch in support for modern VR/XR runtimes in order to pres
 * Patches the original 32-bit game to use SteamVR through OpenXR 1.0 and Direct3D 11. The patcher has a simple UI that auto-detects your game location and backs up original files.
 * Uses the original Oculus eye camera rig to send frames to OpenXR. The eye cameras are positioned using headset data and should support canted displays.
 * Adds a better desktop view rendered from a new camera at the headset's center position.
+* Fixes cover art in SteamVR's Now Playing panel when the game is launched through Steam.
 
 ## Approach
 

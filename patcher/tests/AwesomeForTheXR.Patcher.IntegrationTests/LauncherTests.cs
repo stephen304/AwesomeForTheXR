@@ -28,7 +28,9 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 File.Copy(from, to);
             }
 
-            var service = PatcherService.ForGame(package);
+            var catalog = new TestArtworkCatalog();
+            var service = new PatcherService(package, catalog);
+            string art = Path.Combine(folder, SteamVrArtwork.Name);
             var expected = files.ToDictionary(f => f, f => Hash(File.ReadAllBytes(Path.Combine(folder, f))));
             string helperPath = Path.Combine(folder, helper);
             string playerPath = Path.Combine(folder, player);
@@ -38,6 +40,9 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             File.WriteAllBytes(loaderPath, FirstBuild);
             CheckStatus(service, folder, false, false, "unowned loader collision");
             File.Delete(loaderPath);
+            File.WriteAllText(art, "third-party data");
+            CheckStatus(service, folder, false, false, "unowned artwork collision");
+            File.Delete(art);
             CheckStatus(service, folder, true, false, "clean launcher fixture");
 
             // Force a failure at the last executable after the player was installed.
@@ -54,8 +59,40 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             if (File.Exists(manifest) || File.Exists(loaderPath) || File.Exists(Path.Combine(folder, plugin)))
                 throw new InvalidOperationException("Failed transaction left an installation.");
 
+            catalog.FailAfterAdd = true;
+            try { service.Patch(folder); throw new InvalidOperationException("Expected a registration failure."); }
+            catch (IOException) { }
+            if (File.Exists(art) || File.Exists(manifest) || catalog.Registered)
+                throw new InvalidOperationException("Partial artwork installation was not rolled back.");
+
             service.Patch(folder);
             CheckStatus(service, folder, false, true, "launcher install");
+            if (!catalog.Registered || !File.Exists(art)) throw new InvalidOperationException("Artwork was not installed.");
+
+            // Simulate the title-only release. Its installation record has no artwork field.
+            catalog.Registered = false;
+            File.Delete(art);
+            var oldRecord = PatchFiles.Deserialize<InstallRecord>(File.ReadAllBytes(manifest));
+            oldRecord.Format = "AwesomeForTheXR/openxr-install/4";
+            oldRecord.ArtworkSha256 = null;
+            File.WriteAllBytes(manifest, PatchFiles.Serialize(oldRecord));
+            CheckStatus(service, folder, true, true, "upgrade from the title-only patch");
+            service.Patch(folder);
+            catalog.Registered = false;
+            CheckStatus(service, folder, true, true, "lost SteamVR registration");
+            service.Patch(folder);
+            if (!catalog.Registered) throw new InvalidOperationException("Registration was not repaired.");
+
+            catalog.OtherProvider = true;
+            CheckStatus(service, folder, true, true, "new Steam or third-party provider");
+            service.Patch(folder);
+            if (catalog.Registered || !catalog.OtherProvider) throw new InvalidOperationException("Provider conflict.");
+            CheckStatus(service, folder, false, true, "existing provider retained");
+            catalog.OtherProvider = false;
+            catalog.Available = false;
+            CheckStatus(service, folder, false, true, "SteamVR absent");
+            catalog.Available = true;
+            service.Patch(folder);
             CheckSceneGuards(Path.Combine(folder, managed));
             var loaderBytes = File.ReadAllBytes(loaderPath);
             CheckBytes(loaderPath, File.ReadAllBytes(Path.Combine(package, loader)), "packaged loader installed");
@@ -76,7 +113,7 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             File.WriteAllBytes(helperPath, FirstBuild);
             CheckStatus(service, folder, false, false, "unknown launcher edit");
             File.WriteAllBytes(helperPath, goodHelper);
-            var offline = PatcherService.ForGame(Path.Combine(temp, "absent package"));
+            var offline = new PatcherService(Path.Combine(temp, "absent package"), catalog);
             CheckStatus(offline, folder, false, true, "offline revert");
             // Deny the final manifest removal, after the loader and plugin have both
             // been removed. Recovery must restore their exact bytes without a package.
@@ -89,11 +126,13 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 catch (IOException) { failed = true; }
                 if (!failed) throw new InvalidOperationException("Expected a blocked manifest removal.");
             }
+            if (!catalog.Registered || !File.Exists(art)) throw new InvalidOperationException("Artwork rollback failed.");
             CheckBytes(manifest, installedManifest, "manifest after interrupted revert");
             CheckBytes(loaderPath, loaderBytes, "loader after interrupted revert");
             CheckBytes(Path.Combine(folder, plugin), installedPlugin, "plugin after interrupted revert");
             CheckStatus(offline, folder, false, true, "offline recovery after interrupted revert");
             offline.Revert(folder);
+            if (catalog.Registered || File.Exists(art)) throw new InvalidOperationException("Revert left artwork behind.");
             foreach (var file in files)
                 if (Hash(File.ReadAllBytes(Path.Combine(folder, file))) != expected[file])
                     throw new InvalidOperationException("Revert failed: " + file);
