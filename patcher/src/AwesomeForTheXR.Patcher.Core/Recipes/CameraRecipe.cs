@@ -6,7 +6,7 @@ using Mono.Cecil.Cil;
 namespace AwesomeForTheXR.Patcher.Core
 {
     // All method edits target the original assembly fingerprint checked by GameAssemblyRecipe.
-    internal sealed class CameraRecipe
+    internal sealed partial class CameraRecipe
     {
         private readonly ModuleDefinition module;
         private readonly ModuleReference plugin;
@@ -21,6 +21,7 @@ namespace AwesomeForTheXR.Patcher.Core
             recipe.PatchDisplay();
             recipe.PatchManager();
             recipe.PatchRig();
+            recipe.PatchDesktopMirror();
             recipe.MoveHeadAttachments();
             recipe.PatchGameplayHead();
         }
@@ -168,20 +169,18 @@ namespace AwesomeForTheXR.Patcher.Core
 
             var start=Method(manager,"Start");
             il=start.Body.GetILProcessor();
-            var first=At(start,0x5c);
-            var coroutine=start.Body.Instructions.Single(i=>i.Operand is MethodReference m && m.Name=="CallbackCoroutine");
-            var resume=coroutine.Previous.Previous;
-            // A pre-existing branch targets first. Keep that instruction as the jump.
-            first.OpCode=OpCodes.Br; first.Operand=resume;
-            while(first.Next!=resume) il.Remove(first.Next);
+            // The desktop camera now clears the window. Retain only the original end-of-frame coroutine.
+            var coroutine = start.Body.Instructions.Single(i => i.Operand is MethodReference m && m.Name == "CallbackCoroutine");
+            var resume = coroutine.Previous.Previous;
+            while (start.Body.Instructions[0] != resume) il.Remove(start.Body.Instructions[0]);
 
             Rewrite(Method(manager,"OnDisable")).Emit(OpCodes.Ret);
             il=Rewrite(Method(manager,"OnApplicationQuit"));
             il.Emit(OpCodes.Call,Native("AFTXR_ReleaseLaunch",none));
             il.Emit(OpCodes.Ret);
+            // The game reads this check during the splash. SteamVR owns headset notices.
             il=Rewrite(Method(manager,"get_isHSWDisplayed"));
             il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ret);
-            // The game reads this check during the splash. SteamVR owns headset notices.
             Rewrite(Method(manager,"Update")).Emit(OpCodes.Ret);
             var begin=Method(display,"BeginFrame");
             il=Rewrite(begin);

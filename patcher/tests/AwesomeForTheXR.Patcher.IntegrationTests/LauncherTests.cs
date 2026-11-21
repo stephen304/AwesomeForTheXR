@@ -138,6 +138,35 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             using (var module = ModuleDefinition.ReadModule(path))
             {
                 CheckHeadAnchors(module);
+                var display = module.GetType("OVRDisplay");
+                var manager = module.GetType("OVRManager");
+                var rig = module.GetType("OVRCameraRig");
+                var mirror = rig.Methods.Single(m => m.Name == "AFTXR_DesktopUpdate");
+                var calls = mirror.Body.Instructions.Select(i => i.Operand).OfType<MethodReference>().ToList();
+                if (manager.Methods.Any(m => m.Name == "OnGUI") ||
+                    !rig.Methods.Single(m => m.Name == "UpdateAnchors").Body.Instructions.Any(i => i.Operand == mirror) ||
+                    !calls.Any(m => m.Name == "get_centerEyeAnchor") ||
+                    !calls.Any(m => m.Name == "AddComponent" && m is GenericInstanceMethod g && g.GenericArguments[0].Name == "Camera") ||
+                    calls.Any(m => m.Name == "GetEyeTexture" || m.Name == "set_projectionMatrix" ||
+                        m.Name == "set_aspect" || m.Name == "set_targetTexture" || m.Name == "AFTXR_RenderedEye"))
+                    throw new InvalidOperationException("Expected an independent center camera with an automatic window projection.");
+                var bloom = module.GetType("AFTXRDesktopBloom");
+                var refresh = rig.Methods.Single(m => m.Name == "AFTXR_DesktopRefreshBloomQuality");
+                var quality = module.GetType("PostEffectsQualityManager").Methods.Single(m => m.Name == "DetermineEffects");
+                if (!calls.OfType<GenericInstanceMethod>().Any(m => m.Name == "AddComponent" && m.GenericArguments[0] == bloom) ||
+                    !bloom.Methods.Single(m => m.Name == "OnDestroy").Body.Instructions.Any(i =>
+                        i.Operand is MethodReference destroy && destroy.FullName == "System.Void UnityEngine.Object::DestroyImmediate(UnityEngine.Object)") ||
+                    !quality.Body.Instructions.Any(i => i.Operand == refresh) ||
+                    !refresh.Body.Instructions.Where(i => i.OpCode == OpCodes.Stfld).Select(i => ((FieldReference)i.Operand).Name)
+                        .SequenceEqual(new[] { "bloomBlurIterations", "lensflares", "lensflareIntensity" }))
+                    throw new InvalidOperationException("The desktop bloom must release its materials and follow the game's quality settings.");
+                var getter = display.Methods.Single(m => m.Name == "get_mirrorMode").Body.Instructions;
+                var setter = display.Methods.Single(m => m.Name == "set_mirrorMode").Body.Instructions;
+                if (getter.Count != 2 || getter[0].OpCode != OpCodes.Ldc_I4_1 || getter[1].OpCode != OpCodes.Ret ||
+                    setter.Single().OpCode != OpCodes.Ret || manager.Methods.Single(m => m.Name == "Update").Body.Instructions.Single().OpCode != OpCodes.Ret ||
+                    module.GetType("OVRMainMenu").Methods.Single(m => m.Name == "Update").Body.Instructions
+                        .Any(i => i.Operand is MethodReference m && m.Name == "set_mirrorMode"))
+                    throw new InvalidOperationException("The VR mirror must stay enabled across scenes and ignore the legacy hotkey.");
                 var loader = module.GetType("OculusCheckLoader");
                 var body = loader.Methods.Single(m => m.Name == "Awake").Body.Instructions;
                 var ready = loader.Methods.Single(m => m.Name == "AFTXR_IsOpenXRSceneReady");
