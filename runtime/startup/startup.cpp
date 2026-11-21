@@ -7,15 +7,16 @@ struct LaunchText
 {
     wchar_t vr[4], adapter[9], dx9[12], dx11[13], suffix[64];
     wchar_t otherRenderers[4][16];
-    char narrowDx11[13], prepare[24], variable[32], pending[80], missing[80], incompatible[80];
+    char narrowDx11[13], prepare[24], getStatus[24], abortLaunch[24], title[36], preparedVariable[32], one[2];
+    char missing[80], incompatible[80], stateError[80];
 };
 extern "C" const LaunchText launchText = {
     L"-vr", L"-adapter", L"-force-d3d9", L"-force-d3d11", L"Awesome_Data\\Plugins\\AwesomeForTheXR32.dll",
     { L"-force-d3d9-ref", L"-force-opengl", L"-force-gles20", L"-force-gles30" },
-    "-force-d3d11", "AFTXR_PrepareLaunch", "AFTXR_LAUNCH_STATUS",
-    "AwesomeForTheXR | VR mode disabled (OpenXR renderer pending)",
-    "AwesomeForTheXR | VR mode disabled (could not load XR plugin)",
-    "AwesomeForTheXR | VR mode disabled (incompatible XR plugin)"
+    "-force-d3d11", "AFTXR_PrepareLaunch", "AFTXR_GetLaunchStatus", "AFTXR_AbortVrLaunch", "AwesomeForTheXR - VR startup failed", "AFTXR_GRAPHICS_PREPARED", "1",
+    "The XR plugin could not be loaded. Reapply the game patch.",
+    "The XR plugin is incompatible. Reapply the game patch.",
+    "The game could not pass its VR startup state to Unity."
 };
 
 template <typename T> static T gameImport(const BYTE* image, DWORD rva)
@@ -73,8 +74,7 @@ template <typename Char> static int filterArgs(Char** argv, int count, int reque
     const LaunchText& text, const Char* dx11)
 {
     // Compact the pointer array while preserving ownership of its strings.
-    // An accepted request replaces its own slot with D3D11. On early failure
-    // Unity uses its ordinary desktop renderer and monitor defaults.
+    // Only a prepared request reaches Unity and replaces its own slot with D3D11.
     int out = 1;
     for (int i = 1; i < count; ++i)
     {
@@ -97,28 +97,61 @@ template <typename Char> static int filterArgs(Char** argv, int count, int reque
 
 extern "C" void __cdecl NormalizeAwesomeArgs(wchar_t** argv, int* argc, const BYTE* image, const LaunchText& text)
 {
+    auto setVariable = gameImport<decltype(&SetEnvironmentVariableA)>(image, 0x8562c0);
+    // Do not inherit a prepared VR request from the parent process.
+    setVariable(text.preparedVariable, nullptr);
     if (!argv || *argc < 1) return;
-    auto setStatus = gameImport<decltype(&SetEnvironmentVariableA)>(image, 0x8562c0);
     int request = 1;
     while (request < *argc && !sameFlag(argv[request], text.vr)) ++request;
-    if (request == *argc)
-    {
-        setStatus(text.variable, nullptr);
-        return;
-    }
+    if (request == *argc) return;
 
     const char* reason = text.missing;
-    bool ready = false;
     if (HMODULE plugin = findPlugin(image, text))
     {
         using Prepare = int (__cdecl*)();
-        auto prepare = reinterpret_cast<Prepare>(gameImport<decltype(&GetProcAddress)>(image, 0x856114)(
-            plugin, text.prepare));
-        reason = prepare ? text.pending : text.incompatible;
-        ready = prepare && prepare() == 1;
+        using Status = const char* (__cdecl*)();
+        using Abort = void (__cdecl*)(const char*);
+        auto getProc = gameImport<decltype(&GetProcAddress)>(image, 0x856114);
+        auto prepare = reinterpret_cast<Prepare>(getProc(plugin, text.prepare));
+        auto status = reinterpret_cast<Status>(getProc(plugin, text.getStatus));
+        auto abortLaunch = reinterpret_cast<Abort>(getProc(plugin, text.abortLaunch));
+        reason = text.incompatible;
+        if (prepare && status && abortLaunch)
+        {
+            if (prepare() == 1)
+            {
+                if (setVariable(text.preparedVariable, text.one))
+                {
+                    *argc = filterArgs(argv, *argc, request, true, text, text.dx11);
+                    return;
+                }
+                reason = text.stateError;
+            }
+            else
+            {
+                const char* error = status();
+                if (error && *error) reason = error;
+            }
+            abortLaunch(reason);
+        }
     }
-    setStatus(text.variable, ready ? nullptr : reason);
+    // The stock player already imports both calls. This also works without our DLL.
+    gameImport<decltype(&MessageBoxA)>(image, 0x8566e4)(nullptr, reason, text.title,
+        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    gameImport<decltype(&ExitProcess)>(image, 0x856228)(1);
+}
 
+// The engine reader has already made the startup decision. Mono needs a
+// normalized view of the arguments without starting OpenXR a second time.
+extern "C" void __cdecl NormalizeAwesomeMonoArgs(wchar_t** argv, int* argc, const BYTE* image, const LaunchText& text)
+{
+    if (!argv || *argc < 1) return;
+    int request = 1;
+    while (request < *argc && !sameFlag(argv[request], text.vr)) ++request;
+    if (request == *argc) return;
+    char value[2] = {};
+    const bool ready = gameImport<decltype(&GetEnvironmentVariableA)>(image, 0x856178)(
+        text.preparedVariable, value, sizeof(value)) == 1 && value[0] == '1';
     *argc = filterArgs(argv, *argc, request, ready, text, text.dx11);
 }
 

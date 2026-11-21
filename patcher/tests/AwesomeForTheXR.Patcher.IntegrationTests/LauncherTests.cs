@@ -33,6 +33,11 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             string helperPath = Path.Combine(folder, helper);
             string playerPath = Path.Combine(folder, player);
             string manifest = Path.Combine(folder, "AwesomeForTheXR.manifest.json");
+            const string loader = "openxr_loader.dll";
+            string loaderPath = Path.Combine(folder, loader);
+            File.WriteAllBytes(loaderPath, FirstBuild);
+            CheckStatus(service, folder, false, false, "unowned loader collision");
+            File.Delete(loaderPath);
             CheckStatus(service, folder, true, false, "clean launcher fixture");
 
             // Force a failure at the last executable after the player was installed.
@@ -46,12 +51,17 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             foreach (var file in files)
                 if (Hash(File.ReadAllBytes(Path.Combine(folder, file))) != expected[file])
                     throw new InvalidOperationException("Rollback failed: " + file);
-            if (File.Exists(manifest) || File.Exists(Path.Combine(folder, plugin)))
+            if (File.Exists(manifest) || File.Exists(loaderPath) || File.Exists(Path.Combine(folder, plugin)))
                 throw new InvalidOperationException("Failed transaction left an installation.");
 
             service.Patch(folder);
             CheckStatus(service, folder, false, true, "launcher install");
             CheckSceneGuards(Path.Combine(folder, managed));
+            var loaderBytes = File.ReadAllBytes(loaderPath);
+            CheckBytes(loaderPath, File.ReadAllBytes(Path.Combine(package, loader)), "packaged loader installed");
+            File.WriteAllBytes(loaderPath, FirstBuild);
+            CheckStatus(service, folder, false, false, "modified installed loader");
+            File.WriteAllBytes(loaderPath, loaderBytes);
             string patchedPlayer = Hash(File.ReadAllBytes(playerPath));
             if (patchedPlayer == expected[player] || Hash(File.ReadAllBytes(helperPath)) == expected[helper])
                 throw new InvalidOperationException("The executable pair did not change.");
@@ -68,11 +78,26 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             File.WriteAllBytes(helperPath, goodHelper);
             var offline = PatcherService.ForGame(Path.Combine(temp, "absent package"));
             CheckStatus(offline, folder, false, true, "offline revert");
+            // Deny the final manifest removal, after the loader and plugin have both
+            // been removed. Recovery must restore their exact bytes without a package.
+            byte[] installedManifest = File.ReadAllBytes(manifest);
+            byte[] installedPlugin = File.ReadAllBytes(Path.Combine(folder, plugin));
+            using (File.Open(manifest, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                bool failed = false;
+                try { offline.Revert(folder); }
+                catch (IOException) { failed = true; }
+                if (!failed) throw new InvalidOperationException("Expected a blocked manifest removal.");
+            }
+            CheckBytes(manifest, installedManifest, "manifest after interrupted revert");
+            CheckBytes(loaderPath, loaderBytes, "loader after interrupted revert");
+            CheckBytes(Path.Combine(folder, plugin), installedPlugin, "plugin after interrupted revert");
+            CheckStatus(offline, folder, false, true, "offline recovery after interrupted revert");
             offline.Revert(folder);
             foreach (var file in files)
                 if (Hash(File.ReadAllBytes(Path.Combine(folder, file))) != expected[file])
                     throw new InvalidOperationException("Revert failed: " + file);
-            if (File.Exists(manifest) || File.Exists(Path.Combine(folder, plugin)) ||
+            if (File.Exists(manifest) || File.Exists(loaderPath) || File.Exists(Path.Combine(folder, plugin)) ||
                 Directory.GetFiles(Path.Combine(folder, backup), "*.previous").Length != 0)
                 throw new InvalidOperationException("Revert left installation or transaction files.");
             Console.WriteLine("PASS: executable install, mid-install rollback, repair, tamper detection and offline revert.");
@@ -88,21 +113,29 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 var enter = loader.Methods.Single(m => m.Name == "AFTXR_EnterOpenXRScene");
                 var check = body.Single(i => i.OpCode == OpCodes.Call && i.Operand == ready);
                 var scene = body.Single(i => i.OpCode == OpCodes.Call && i.Operand == enter);
-                var store = (Instruction)check.Next.Operand;
+                var accepted = (Instruction)check.Next.Operand;
+                var store = (Instruction)accepted.Next.Operand;
+                var abort = loader.Methods.Single(m => m.Name == "AFTXR_AbortVrLaunch");
+                var rejected = check.Next.Next;
                 var mode = store.Next;
                 var arcade = mode.Next.Next;
                 var desktop = mode.Next.Operand as Instruction;
                 if (check.Previous.OpCode != OpCodes.Brfalse || check.Previous.Operand != store.Previous ||
-                    store.Previous.OpCode != OpCodes.Ldc_I4_0 || check.Next.OpCode != OpCodes.Br ||
+                    store.Previous.OpCode != OpCodes.Ldc_I4_0 || check.Next.OpCode != OpCodes.Brtrue ||
+                    accepted.OpCode != OpCodes.Ldc_I4_1 || accepted.Next.OpCode != OpCodes.Br ||
+                    rejected.OpCode != OpCodes.Ldstr || rejected.Next.OpCode != OpCodes.Call ||
+                    rejected.Next.Operand != abort || rejected.Next.Next.OpCode != OpCodes.Ret ||
                     store.OpCode != OpCodes.Stsfld || mode.OpCode != OpCodes.Ldsfld || mode.Operand != store.Operand ||
                     ((FieldReference)mode.Operand).Name != "isVRSupportEnabled" || mode.Next.OpCode != OpCodes.Brfalse ||
                     arcade.OpCode != OpCodes.Ldsfld || ((FieldReference)arcade.Operand).Name != "isDavebustersBuild" ||
-                    arcade.Next.OpCode != OpCodes.Brtrue || arcade.Next.Operand != desktop || arcade.Next.Next != scene ||
-                    desktop?.OpCode != OpCodes.Ldstr || (string)desktop.Operand != "AFTXR_LAUNCH_STATUS" ||
+                    arcade.Next.OpCode != OpCodes.Brtrue || !(arcade.Next.Operand is Instruction arcadeError) ||
+                    arcadeError.OpCode != OpCodes.Ldstr || arcadeError.Next.Operand != abort || arcade.Next.Next != scene ||
+                    desktop?.OpCode != OpCodes.Ldstr || (string)desktop.Operand != "AwesomeForTheXR | VR mode disabled" ||
                     body.Any(i => i.Operand is MethodReference m && m.Name == "LoadLevel"))
                     throw new InvalidOperationException("The patched loader lost its guarded OpenXR scene entry.");
 
                 if (!ready.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ldc_I4_0, OpCodes.Ret }) ||
+                    abort.PInvokeInfo?.EntryPoint != "AFTXR_AbortVrLaunch" ||
                     !enter.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ret }))
                     throw new InvalidOperationException("The desktop milestone must keep both OpenXR scene hooks inactive.");
             }

@@ -10,6 +10,7 @@ namespace AwesomeForTheXR.Patcher.Core
         private const string AssemblyOnlyFormat = "AwesomeForTheXR/assembly-install/1";
         private const string NativePluginFormat = "AwesomeForTheXR/marker-install/2";
         private const string LauncherFormat = "AwesomeForTheXR/launcher-install/3";
+        private const string OpenXRFormat = "AwesomeForTheXR/openxr-install/4";
         private readonly bool hasLaunchers;
         private static LauncherFile Player(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Player, PlayerRecipe.PlayerOriginal);
         private static LauncherFile Forwarder(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Helper, PlayerRecipe.HelperOriginal);
@@ -84,6 +85,9 @@ namespace AwesomeForTheXR.Patcher.Core
             string native = PatchFiles.OptionalDigest(paths.Native);
             string player = hasLaunchers ? Player(paths).Inspect(record?.PlayerSha256, interrupted) : null;
             string helper = hasLaunchers ? Forwarder(paths).Inspect(record?.ForwarderSha256, interrupted) : null;
+            string loader = hasLaunchers ? PatchFiles.OptionalDigest(paths.Resolve(InstallPaths.LoaderName)) : null;
+            if (!interrupted && loader != record?.LoaderSha256)
+                throw new InvalidDataException("Unrecognized, missing or modified OpenXR loader: " + InstallPaths.LoaderName);
             if (interrupted) ReadJournal(paths, live, native, record);
             else
             {
@@ -108,7 +112,8 @@ namespace AwesomeForTheXR.Patcher.Core
                 {
                     ReadPackage(PlayerRecipe.Helper, out var forwarderHash);
                     ReadPackage(PlayerRecipe.Startup, out var startupHash);
-                    launchersCurrent = record?.StartupSha256 == startupHash && helper == forwarderHash && player == record.PlayerSha256;
+                    ReadPackage(InstallPaths.LoaderName, out var loaderHash);
+                    launchersCurrent = loader == loaderHash && record?.StartupSha256 == startupHash && helper == forwarderHash && player == record.PlayerSha256;
                 }
             }
             catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)
@@ -172,10 +177,12 @@ namespace AwesomeForTheXR.Patcher.Core
             if (r == null || r.OriginalSha256 != baseline ||
                 r.Backup != paths.OriginalRelative || !PatchFiles.IsHash(r.InstalledSha256))
                 throw new InvalidDataException("Unrecognized installation manifest.");
-            bool legacy = r.PlayerSha256 == null && r.ForwarderSha256 == null && r.StartupSha256 == null &&
+            bool legacy = r.LoaderSha256 == null && r.PlayerSha256 == null && r.ForwarderSha256 == null && r.StartupSha256 == null &&
                 ((r.Format == AssemblyOnlyFormat && r.NativeSha256 == null) ||
                  (r.Format == NativePluginFormat && PatchFiles.IsHash(r.NativeSha256)));
-            bool launchers = hasLaunchers && r.Format == LauncherFormat && PatchFiles.IsHash(r.NativeSha256) &&
+            bool launcherVersion = (r.Format == LauncherFormat && r.LoaderSha256 == null) ||
+                (r.Format == OpenXRFormat && PatchFiles.IsHash(r.LoaderSha256));
+            bool launchers = hasLaunchers && launcherVersion && PatchFiles.IsHash(r.NativeSha256) &&
                 PatchFiles.IsHash(r.PlayerSha256) && PatchFiles.IsHash(r.ForwarderSha256) && PatchFiles.IsHash(r.StartupSha256);
             if (!legacy && !launchers)
                 throw new InvalidDataException("Unrecognized installation manifest version or payload hash.");
@@ -198,10 +205,22 @@ namespace AwesomeForTheXR.Patcher.Core
                 (j.AfterNativeHash != null && !PatchFiles.IsHash(j.AfterNativeHash)) ||
                 (native != j.BeforeNativeHash && native != j.AfterNativeHash) || j.BeforeNativeHash != old?.NativeSha256)
                 throw new InvalidDataException("Interrupted update conflicts with the native plugin.");
+            if (hasLaunchers)
+            {
+                string loader = PatchFiles.OptionalDigest(paths.Resolve(InstallPaths.LoaderName));
+                bool savedLoader = j.BeforeLoaderHash != j.AfterLoaderHash && j.BeforeLoaderHash != null;
+                if (j.BeforeLoaderHash != old?.LoaderSha256 ||
+                    (j.AfterLoaderHash != null && !PatchFiles.IsHash(j.AfterLoaderHash)) ||
+                    (loader != j.BeforeLoaderHash && loader != j.AfterLoaderHash) ||
+                    (savedLoader ? j.PreviousLoader == null || PatchFiles.Digest(j.PreviousLoader) != j.BeforeLoaderHash
+                                 : j.PreviousLoader != null))
+                    throw new InvalidDataException("Interrupted update conflicts with the OpenXR loader.");
+            }
             bool currentIsOld = current?.InstalledSha256 == old?.InstalledSha256 && current?.NativeSha256 == old?.NativeSha256 &&
                 current?.PlayerSha256 == old?.PlayerSha256 && current?.ForwarderSha256 == old?.ForwarderSha256 &&
-                current?.StartupSha256 == old?.StartupSha256;
-            bool currentIsNew = (current?.InstalledSha256 ?? baseline) == j.AfterHash && current?.NativeSha256 == j.AfterNativeHash;
+                current?.StartupSha256 == old?.StartupSha256 && current?.LoaderSha256 == old?.LoaderSha256;
+            bool currentIsNew = (current?.InstalledSha256 ?? baseline) == j.AfterHash && current?.NativeSha256 == j.AfterNativeHash &&
+                current?.LoaderSha256 == j.AfterLoaderHash;
             if ((j.BeforeHash != baseline && j.BeforeHash != old?.InstalledSha256) || (!currentIsOld && !currentIsNew))
                 throw new InvalidDataException("Interrupted update conflicts with the installation manifest.");
             if (hasLaunchers)
@@ -252,6 +271,21 @@ namespace AwesomeForTheXR.Patcher.Core
                     throw new IOException("The installed plugin changed during verification.");
                 string afterNativeHash = null;
                 byte[] afterNative = revert ? null : ReadPackage(InstallPaths.NativeName, out afterNativeHash);
+                string loaderPath = hasLaunchers ? paths.Resolve(InstallPaths.LoaderName) : null;
+                string beforeLoaderHash = current?.LoaderSha256, afterLoaderHash = null;
+                byte[] afterLoader = null, previousLoader = null;
+                if (hasLaunchers)
+                {
+                    if (PatchFiles.OptionalDigest(loaderPath) != beforeLoaderHash)
+                        throw new IOException("The installed OpenXR loader changed during verification.");
+                    if (!revert) afterLoader = ReadPackage(InstallPaths.LoaderName, out afterLoaderHash);
+                    if (beforeLoaderHash != null && beforeLoaderHash != afterLoaderHash)
+                    {
+                        previousLoader = File.ReadAllBytes(loaderPath);
+                        if (PatchFiles.Digest(previousLoader) != beforeLoaderHash)
+                            throw new IOException("The OpenXR loader rollback snapshot failed verification.");
+                    }
+                }
                 string startupHash = null;
                 byte[] playerBytes = null, forwarderBytes = null;
                 ExecutableChange playerChange = null, forwarderChange = null;
@@ -273,6 +307,7 @@ namespace AwesomeForTheXR.Patcher.Core
                     Player = playerChange, Forwarder = forwarderChange,
                     BeforeHash = beforeHash,
                     AfterHash = afterHash,
+                    PreviousLoader = previousLoader, BeforeLoaderHash = beforeLoaderHash, AfterLoaderHash = afterLoaderHash,
                     PreviousNative = beforeNative,
                     BeforeNativeHash = beforeNativeHash,
                     AfterNativeHash = afterNativeHash,
@@ -284,6 +319,7 @@ namespace AwesomeForTheXR.Patcher.Core
                 {
                     // Put the plugin in place before enabling the managed call.
                     // On revert, disable that call before removing the plugin.
+                    if (!revert && hasLaunchers) PatchFiles.Transition(loaderPath, beforeLoaderHash, afterLoaderHash, afterLoader);
                     if (!revert) PatchFiles.Transition(paths.Native, beforeNativeHash, afterNativeHash, afterNative);
                     PatchFiles.Transition(paths.Live, beforeHash, afterHash, candidate);
                     if (hasLaunchers)
@@ -292,10 +328,11 @@ namespace AwesomeForTheXR.Patcher.Core
                         Forwarder(paths).Apply(forwarderChange, forwarderBytes);
                     }
                     if (revert) PatchFiles.Transition(paths.Native, beforeNativeHash, null, null);
+                    if (revert && hasLaunchers) PatchFiles.Transition(loaderPath, beforeLoaderHash, null, null);
                     if (revert) File.Delete(paths.Record);
                     else
                     {
-                        var record = new InstallRecord { Format = hasLaunchers ? LauncherFormat : afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
+                        var record = new InstallRecord { LoaderSha256 = afterLoaderHash, Format = hasLaunchers ? OpenXRFormat : afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
                             PlayerSha256 = playerChange?.After, ForwarderSha256 = forwarderChange?.After, StartupSha256 = startupHash,
                             NativeSha256 = afterNativeHash, OriginalSha256 = baseline,
                             InstalledSha256 = afterHash, Backup = paths.OriginalRelative };
@@ -330,6 +367,10 @@ namespace AwesomeForTheXR.Patcher.Core
             var j = ReadJournal(paths, live, native, ReadRecord(paths));
             if (hasLaunchers)
             {
+                var loaderPath = paths.Resolve(InstallPaths.LoaderName);
+                string loader = PatchFiles.OptionalDigest(loaderPath);
+                if (loader != j.BeforeLoaderHash)
+                    PatchFiles.Transition(loaderPath, loader, j.BeforeLoaderHash, j.PreviousLoader);
                 Forwarder(paths).RollBack(j.Forwarder);
                 Player(paths).RollBack(j.Player);
             }

@@ -10,7 +10,7 @@ namespace AwesomeForTheXR.Patcher.Core
     internal static class TestMarkerRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "8F15612E80B22215A85F32E02E55F49F7A695CDC4BDB8116E5F79D311051DBD3";
+        internal const string PatchedHash = "AC32BD9CD35DFDEEE41144FAAB430524D300DF204FA78D645A1F1C8708677B50";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -106,6 +106,17 @@ namespace AwesomeForTheXR.Patcher.Core
             awake.DeclaringType.Methods.Add(sceneReady);
             // Future: validate Unity's actual D3D11 device and session eligibility.
             // A successful graphics preflight alone cannot enable the stock VR rig.
+            var plugin = new ModuleReference("AwesomeForTheXR32");
+            module.ModuleReferences.Add(plugin);
+            var abortLaunch = new MethodDefinition("AFTXR_AbortVrLaunch", attrs | MethodAttributes.PInvokeImpl,
+                module.TypeSystem.Void)
+            {
+                ImplAttributes = MethodImplAttributes.PreserveSig,
+                PInvokeInfo = new PInvokeInfo(PInvokeAttributes.CallConvCdecl | PInvokeAttributes.NoMangle,
+                    "AFTXR_AbortVrLaunch", plugin)
+            };
+            abortLaunch.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
+            awake.DeclaringType.Methods.Add(abortLaunch);
             var readyIL = sceneReady.Body.GetILProcessor();
             readyIL.Emit(OpCodes.Ldc_I4_0);
             readyIL.Emit(OpCodes.Ret);
@@ -127,26 +138,33 @@ namespace AwesomeForTheXR.Patcher.Core
             ifPrepared.Operand = noGraphics;
             checkScene.OpCode = OpCodes.Call;
             checkScene.Operand = sceneReady;
+            var readyToEnter = il.Create(OpCodes.Ldc_I4_1);
+            il.InsertBefore(oldStore, il.Create(OpCodes.Brtrue, readyToEnter));
+            il.InsertBefore(oldStore, il.Create(OpCodes.Ldstr, "Headset rendering is not implemented in this build."));
+            il.InsertBefore(oldStore, il.Create(OpCodes.Call, abortLaunch));
+            il.InsertBefore(oldStore, il.Create(OpCodes.Ret));
+            il.InsertBefore(oldStore, readyToEnter);
             il.InsertBefore(oldStore, il.Create(OpCodes.Br, oldStore));
             il.InsertBefore(oldStore, noGraphics);
 
             sceneName.OpCode = OpCodes.Call;
             sceneName.Operand = enterScene;
             il.Remove(loadLevel);
-            // Both original guard exits still target this instruction and report the outcome.
+            // Only ordinary desktop launches take the disabled badge branch.
             done.OpCode = OpCodes.Ldstr;
-            done.Operand = "AFTXR_LAUNCH_STATUS";
-            il.Emit(OpCodes.Call, read);
+            done.Operand = VrDisabled;
             var store = il.Create(OpCodes.Stsfld, status);
             il.InsertBefore(done, il.Create(OpCodes.Ldstr, "AwesomeForTheXR | VR mode enabled"));
             il.InsertBefore(done, il.Create(OpCodes.Br, store));
-            il.Emit(OpCodes.Dup);
-            il.Emit(OpCodes.Brtrue, store);
-            il.Emit(OpCodes.Pop);
-            il.Emit(OpCodes.Ldstr, VrDisabled);
             il.Append(store);
             il.Emit(OpCodes.Ldsfld, status);
             il.Emit(OpCodes.Call, log);
+            il.Emit(OpCodes.Ret);
+
+            var arcadeError = il.Create(OpCodes.Ldstr, "VR is unavailable in arcade mode.");
+            arcadeBranch.Operand = arcadeError;
+            il.Append(arcadeError);
+            il.Emit(OpCodes.Call, abortLaunch);
             il.Emit(OpCodes.Ret);
         }
 

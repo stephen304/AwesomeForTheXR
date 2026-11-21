@@ -7,6 +7,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Shared\GameDiscovery.cs" Link="GameDiscovery.cs" />
+    <Compile Include="..\Shared\OpenXRLicense.cs" Link="OpenXRLicense.cs" />
+    <EmbeddedResource Include="..\..\..\runtime\plugin\OpenXR-LICENSE.txt" LogicalName="OpenXR-LICENSE.txt" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
     <ProjectReference Include="..\AwesomeForTheXR.Patcher.Core\AwesomeForTheXR.Patcher.Core.csproj" />

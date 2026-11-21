@@ -27,6 +27,7 @@ try {
     if ($LASTEXITCODE) { throw 'Managed patcher build failed.' }
 
     $native = Join-Path $root "artifacts/runtime/build/plugin/$Configuration/AwesomeForTheXR32.dll"
+    $loader = Join-Path $root "artifacts/runtime/build/plugin/openxr_loader.dll"
     $forwarder = Join-Path $root "artifacts/runtime/build/forwarder/$Configuration/Awesome_DirectToRift.exe"
     $startupDir = Join-Path $root "artifacts/runtime/build/startup/$Configuration"
     $startup = Join-Path $startupDir 'AwesomeStartup.bin'
@@ -39,7 +40,9 @@ try {
         $output = Join-Path $root ("artifacts/patcher/bin/AwesomeForTheXR.Patcher.$frontend/" + $Configuration.ToLowerInvariant())
         $payload = Join-Path $output 'patch'
         [IO.Directory]::CreateDirectory($payload) | Out-Null
-        foreach ($source in @($native, $forwarder, $startup)) {
+        # Earlier builds placed the notice here. Both executables now embed it.
+        [IO.File]::Delete((Join-Path $output 'OpenXR-LICENSE.txt'))
+        foreach ($source in @($native, $forwarder, $startup, $loader)) {
             $destination = Join-Path $payload ([IO.Path]::GetFileName($source))
             Copy-Item -LiteralPath $source -Destination $destination -Force
             $digest = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash

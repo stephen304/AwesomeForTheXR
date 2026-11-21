@@ -4,6 +4,7 @@
 .model flat
 option casemap:none
 EXTERN _NormalizeAwesomeArgs:PROC
+EXTERN _NormalizeAwesomeMonoArgs:PROC
 EXTERN _launchText:BYTE
 EXTERN _NormalizeAwesomeEngineArgs:PROC
 .code
@@ -13,7 +14,7 @@ _StartupTable LABEL BYTE
     DD IMAGEREL monoArgs
     DD IMAGEREL graphicsArgs
 
-normalize MACRO argcOffset, returnRva
+normalize MACRO argcOffset, returnRva, handler
     LOCAL here
     mov ecx, [esp]
     sub ecx, returnRva         ; actual ASLR-adjusted base of Awesome.exe
@@ -28,18 +29,18 @@ here:
     lea ecx, [ebp + argcOffset]
     push ecx
     push eax
-    call _NormalizeAwesomeArgs
+    call handler
     add esp, 16
     pop eax
 ENDM
 
 engineArgs:
-    normalize -80h, 1f368ah
+    normalize -80h, 1f368ah, _NormalizeAwesomeArgs
     mov [ebp-44h], eax         ; displaced instructions, including condition flags
     cmp eax, ebx
     ret
 monoArgs:
-    normalize -4, 22412h
+    normalize -4, 22412h, _NormalizeAwesomeMonoArgs
     mov [ebp-0ch], eax
     mov eax, [ebp-4]
     ret

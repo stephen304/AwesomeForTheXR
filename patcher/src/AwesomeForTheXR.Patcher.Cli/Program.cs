@@ -6,10 +6,17 @@ namespace AwesomeForTheXR.Patcher.Cli
 {
     internal static class Program
     {
-        private const string Usage = "Usage: AwesomeForTheXR-Patcher.Cli.exe <verify|patch|revert> [--game-dir PATH] [-y]";
+        private static readonly string Usage =
+            "Usage: AwesomeForTheXR-Patcher.Cli.exe <verify|patch|revert> [--game-dir PATH] [-y]" + Environment.NewLine +
+            "       AwesomeForTheXR-Patcher.Cli.exe --openxr-license";
 
         private static int Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--openxr-license")
+            {
+                Console.Write(OpenXRLicense.ReadText());
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--help")
             {
                 Console.WriteLine(Usage);

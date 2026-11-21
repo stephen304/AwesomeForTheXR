@@ -1,0 +1,9 @@
+LIBRARY openxr_loader
+EXPORTS
+    BindPreflightFixture
+    xrCreateInstance=_xrCreateInstance@8
+    xrDestroyInstance=_xrDestroyInstance@8
+    xrGetInstanceProperties=_xrGetInstanceProperties@12
+    xrGetSystem=_xrGetSystem@16
+    xrGetSystemProperties=_xrGetSystemProperties@20
+    xrGetInstanceProcAddr=_xrGetInstanceProcAddr@16

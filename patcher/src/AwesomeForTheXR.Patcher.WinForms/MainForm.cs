@@ -25,8 +25,8 @@ namespace AwesomeForTheXR.Patcher.WinForms
             Text = "AwesomeForTheXR Patcher";
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(600, 185);
-            MinimumSize = new Size(420, 220);
+            ClientSize = new Size(600, 210);
+            MinimumSize = new Size(420, 245);
             StartPosition = FormStartPosition.CenterScreen;
 
             var layout = new TableLayoutPanel
@@ -67,6 +67,12 @@ namespace AwesomeForTheXR.Patcher.WinForms
             layout.SetColumnSpan(actions, 2);
             Controls.Add(layout);
 
+            var about = new ToolStripMenuItem("&About");
+            about.DropDownItems.Add("&OpenXR License", null, (sender, e) => ShowOpenXRLicense());
+            MainMenuStrip = new MenuStrip();
+            MainMenuStrip.Items.Add(about);
+            Controls.Add(MainMenuStrip);
+
             DisableActions();
             folder.TextChanged += (sender, e) => SelectionChanged();
             browse.Click += (sender, e) => Browse();
@@ -101,6 +107,44 @@ namespace AwesomeForTheXR.Patcher.WinForms
                 status.Text = "Select the game folder to check its files.";
             else
                 folder.Text = selectedFolder;
+        }
+
+        private void ShowOpenXRLicense()
+        {
+            using (var dialog = new Form
+            {
+                Text = "OpenXR License",
+                Font = Font,
+                AutoScaleMode = AutoScaleMode.Font,
+                ClientSize = new Size(740, 480),
+                MinimumSize = new Size(360, 240),
+                StartPosition = FormStartPosition.CenterParent,
+                ShowInTaskbar = false,
+                Padding = new Padding(10)
+            })
+            {
+                var notice = new TextBox
+                {
+                    AccessibleName = "OpenXR license text",
+                    Multiline = true,
+                    ReadOnly = true,
+                    WordWrap = false,
+                    ScrollBars = ScrollBars.Both,
+                    Dock = DockStyle.Fill,
+                    Text = OpenXRLicense.ReadText().Replace("\r\n", "\n").Replace("\n", Environment.NewLine)
+                };
+                var close = new Button { Text = "&Close", AutoSize = true, DialogResult = DialogResult.Cancel };
+                var buttons = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft
+                };
+                buttons.Controls.Add(close);
+                dialog.Controls.Add(notice);
+                dialog.Controls.Add(buttons);
+                dialog.CancelButton = close;
+                dialog.ActiveControl = notice;
+                dialog.ShowDialog(this);
+            }
         }
 
         private void Browse()
@@ -160,7 +204,7 @@ namespace AwesomeForTheXR.Patcher.WinForms
         private async Task ChangeFilesAsync(bool restore)
         {
             if (changingFiles) return;
-            if (restore && MessageBox.Show(this, "Restore both original executables and the game assembly, and remove the installed patch plugin?", "Revert patch",
+            if (restore && MessageBox.Show(this, "Restore both original executables and the game assembly, and remove the patch plugin and OpenXR loader?", "Revert patch",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
 

@@ -93,6 +93,7 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(EmitDefaultValue = false)] public string PlayerSha256;
         [DataMember(EmitDefaultValue = false)] public string ForwarderSha256;
         [DataMember(EmitDefaultValue = false)] public string StartupSha256;
+        [DataMember(EmitDefaultValue = false)] public string LoaderSha256;
     }
 
     // This snapshot is deliberately separate from the immutable original.
@@ -108,6 +109,9 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(EmitDefaultValue = false)] public string BeforeNativeHash;
         [DataMember(EmitDefaultValue = false)] public string AfterNativeHash;
         [DataMember(EmitDefaultValue = false)] public byte[] PreviousNative;
+        [DataMember(EmitDefaultValue = false)] public string BeforeLoaderHash;
+        [DataMember(EmitDefaultValue = false)] public string AfterLoaderHash;
+        [DataMember(EmitDefaultValue = false)] public byte[] PreviousLoader;
     }
 
     internal sealed class InstallPaths
@@ -115,6 +119,7 @@ namespace AwesomeForTheXR.Patcher.Core
         internal const string Assembly = "Awesome_Data/Managed/Assembly-CSharp.dll";
         internal const string Manifest = "AwesomeForTheXR.manifest.json";
         internal const string NativeName = "AwesomeForTheXR32.dll";
+        internal const string LoaderName = "openxr_loader.dll";
         internal const string NativeFile = "Awesome_Data/Plugins/" + NativeName;
         internal readonly string Root, Live, Native, Record, Original, OriginalRelative, DirectoryPath, Journal, Lock;
 
