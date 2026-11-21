@@ -160,7 +160,7 @@ namespace AwesomeForTheXR.Patcher.WinForms
         private async Task ChangeFilesAsync(bool restore)
         {
             if (changingFiles) return;
-            if (restore && MessageBox.Show(this, "Restore the original game assembly and remove the installed patch plugin?", "Revert patch",
+            if (restore && MessageBox.Show(this, "Restore both original executables and the game assembly, and remove the installed patch plugin?", "Revert patch",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
 

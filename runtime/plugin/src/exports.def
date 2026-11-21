@@ -1,3 +1,4 @@
 LIBRARY AwesomeForTheXR32
 EXPORTS
     AFTXR_GetMarkerVersion
+    AFTXR_PrepareLaunch

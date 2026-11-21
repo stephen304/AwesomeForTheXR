@@ -31,7 +31,7 @@ namespace AwesomeForTheXR.Patcher.Core
         }
 
         // Each replace is local to one volume. The transaction journal makes
-        // the pair (assembly + native plugin) recoverable across replacements.
+        // each owned game file recoverable across replacements.
         internal static void Transition(string path, string before, string after, byte[] contents)
         {
             if (OptionalDigest(path) != before)
@@ -90,6 +90,9 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(IsRequired = true)] public string InstalledSha256;
         [DataMember(IsRequired = true)] public string Backup;
         [DataMember(EmitDefaultValue = false)] public string NativeSha256;
+        [DataMember(EmitDefaultValue = false)] public string PlayerSha256;
+        [DataMember(EmitDefaultValue = false)] public string ForwarderSha256;
+        [DataMember(EmitDefaultValue = false)] public string StartupSha256;
     }
 
     // This snapshot is deliberately separate from the immutable original.
@@ -100,6 +103,8 @@ namespace AwesomeForTheXR.Patcher.Core
         [DataMember(IsRequired = true)] public string AfterHash;
         [DataMember(IsRequired = true)] public byte[] PreviousAssembly;
         [DataMember] public byte[] PreviousManifest;
+        [DataMember(EmitDefaultValue = false)] public ExecutableChange Player;
+        [DataMember(EmitDefaultValue = false)] public ExecutableChange Forwarder;
         [DataMember(EmitDefaultValue = false)] public string BeforeNativeHash;
         [DataMember(EmitDefaultValue = false)] public string AfterNativeHash;
         [DataMember(EmitDefaultValue = false)] public byte[] PreviousNative;

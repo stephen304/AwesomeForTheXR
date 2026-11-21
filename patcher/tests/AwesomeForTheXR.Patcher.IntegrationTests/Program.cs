@@ -7,18 +7,21 @@ using AwesomeForTheXR.Patcher.Core;
 
 namespace AwesomeForTheXR.Patcher.IntegrationTests
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static readonly byte[] Original = Encoding.ASCII.GetBytes("synthetic assembly v1");
         private static readonly byte[] FirstBuild = Encoding.ASCII.GetBytes("synthetic patched build 1");
         private static readonly byte[] SecondBuild = Encoding.ASCII.GetBytes("synthetic patched build 2");
 
-        private static int Main()
+        private static int Main(string[] args)
         {
             var folder = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),
                 "AwesomeForTheXR-smoke-" + Guid.NewGuid().ToString("N")));
             try
             {
+                if (args.Length != 0 && args.Length != 2)
+                    throw new ArgumentException("Optional arguments: <supported game folder> <built patch package folder>");
+                if (args.Length == 2) TestLaunchers(folder.FullName, args[0], args[1]);
                 TestPatchCycle(folder.FullName);
                 TestNativePlugin(folder.FullName);
                 Console.WriteLine("PASS: managed/native install, update, interrupted transaction, verified revert and tamper detection.");

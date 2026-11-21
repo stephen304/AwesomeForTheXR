@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.Serialization;
@@ -10,9 +9,12 @@ namespace AwesomeForTheXR.Patcher.Core
     {
         private const string AssemblyOnlyFormat = "AwesomeForTheXR/assembly-install/1";
         private const string NativePluginFormat = "AwesomeForTheXR/marker-install/2";
+        private const string LauncherFormat = "AwesomeForTheXR/launcher-install/3";
+        private readonly bool hasLaunchers;
+        private static LauncherFile Player(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Player, PlayerRecipe.PlayerOriginal);
+        private static LauncherFile Forwarder(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Helper, PlayerRecipe.HelperOriginal);
         private readonly string baseline, desired, nativePackageDirectory;
         private readonly Func<byte[], byte[]> rewrite;
-        private readonly IDictionary<string, string> companionFiles;
 
         // A recipe is compiled code with fixed source and output digests. The
         // scaffold's synthetic recipes use this seam without shipping game data.
@@ -38,12 +40,7 @@ namespace AwesomeForTheXR.Patcher.Core
             TestMarkerRecipe.OriginalHash, TestMarkerRecipe.PatchedHash, TestMarkerRecipe.Rewrite,
             packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory)))
         {
-            companionFiles = new Dictionary<string, string>
-            {
-                ["Awesome.exe"] = "E913CB114A94EC190E45266AD44721A8EC3636D364CEA9CB0AECEC7717006CE2",
-                ["Awesome_Data/Plugins/OculusPlugin.dll"] = "0C50EF33ACB01C8B1D3CF526CEE1A3FA64182EFE59F48CE3F3E3445AE883A9EF",
-                ["Awesome_DirectToRift.exe"] = "47AD5AD4962138DF0A9AD26315E297AEA36343F150E292B805106A99E9BAB396"
-            };
+            hasLaunchers = true;
         }
 
         public static PatcherService ForGame() => ForGame(Path.Combine(AppContext.BaseDirectory, "patch"));
@@ -66,14 +63,12 @@ namespace AwesomeForTheXR.Patcher.Core
 
         private PatchStatus Check(InstallPaths paths)
         {
-            if (companionFiles != null)
-                foreach (var pair in companionFiles)
-                {
-                    var path = paths.Resolve(pair.Key);
-                    RequireFile(path, pair.Key);
-                    if (PatchFiles.Digest(path) != pair.Value)
-                        throw new InvalidDataException("File does not match the supported build: " + pair.Key);
-                }
+            if (hasLaunchers)
+            {
+                const string oculus = "Awesome_Data/Plugins/OculusPlugin.dll";
+                if (PatchFiles.OptionalDigest(paths.Resolve(oculus)) != "0C50EF33ACB01C8B1D3CF526CEE1A3FA64182EFE59F48CE3F3E3445AE883A9EF")
+                    throw new InvalidDataException("File does not match the supported build: " + oculus);
+            }
 
             RequireFile(paths.Live, InstallPaths.Assembly);
             string live = PatchFiles.Digest(paths.Live);
@@ -87,6 +82,8 @@ namespace AwesomeForTheXR.Patcher.Core
             }
 
             string native = PatchFiles.OptionalDigest(paths.Native);
+            string player = hasLaunchers ? Player(paths).Inspect(record?.PlayerSha256, interrupted) : null;
+            string helper = hasLaunchers ? Forwarder(paths).Inspect(record?.ForwarderSha256, interrupted) : null;
             if (interrupted) ReadJournal(paths, live, native, record);
             else
             {
@@ -96,19 +93,29 @@ namespace AwesomeForTheXR.Patcher.Core
                     throw new InvalidDataException("Unrecognized, missing or modified plugin: " + InstallPaths.NativeName);
             }
 
-            if (companionFiles != null && GameIsRunning(paths.Root))
+            if (hasLaunchers && GameIsRunning(paths.Root))
                 return new PatchStatus("Close Awesome to patch or revert.");
 
             if (interrupted)
                 return new PatchStatus("Interrupted update. Revert will recover the original files.", false, true);
             if (rewrite == null) return new PatchStatus("A compatible game patch is required.", false, record != null);
             string desiredNative;
-            try { ReadPackage(out desiredNative); }
+            bool launchersCurrent = true;
+            try
+            {
+                ReadPackage(InstallPaths.NativeName, out desiredNative);
+                if (hasLaunchers)
+                {
+                    ReadPackage(PlayerRecipe.Helper, out var forwarderHash);
+                    ReadPackage(PlayerRecipe.Startup, out var startupHash);
+                    launchersCurrent = record?.StartupSha256 == startupHash && helper == forwarderHash && player == record.PlayerSha256;
+                }
+            }
             catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)
             {
                 return new PatchStatus("Patch package unavailable. " + ex.Message, false, record != null);
             }
-            if (record != null && live == desired && native == desiredNative)
+            if (record != null && live == desired && native == desiredNative && launchersCurrent)
                 return new PatchStatus("Files already match this patch.", canRevert: true, isCurrent: true);
             if (record != null && live != baseline)
                 return new PatchStatus("Files match the previous patch. Update available.", true, true);
@@ -117,8 +124,13 @@ namespace AwesomeForTheXR.Patcher.Core
 
         private static bool GameIsRunning(string root)
         {
-            var target = Path.Combine(root, "Awesome.exe");
-            foreach (var process in Process.GetProcessesByName("Awesome"))
+            return ExecutableIsRunning(root, PlayerRecipe.Player) || ExecutableIsRunning(root, PlayerRecipe.Helper);
+        }
+
+        private static bool ExecutableIsRunning(string root, string name)
+        {
+            var target = Path.Combine(root, name);
+            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(name)))
             {
                 using (process)
                 {
@@ -140,17 +152,17 @@ namespace AwesomeForTheXR.Patcher.Core
             if (!File.Exists(path)) throw new FileNotFoundException("Missing file: " + description);
         }
 
-        private byte[] ReadPackage(out string digest)
+        private byte[] ReadPackage(string name, out string digest)
         {
             digest = null;
             if (nativePackageDirectory == null) return null;
-            string file = Path.Combine(nativePackageDirectory, InstallPaths.NativeName);
-            RequireFile(file, InstallPaths.NativeName);
-            RequireFile(file + ".sha256", InstallPaths.NativeName + ".sha256");
+            string file = Path.Combine(nativePackageDirectory, name);
+            RequireFile(file, name);
+            RequireFile(file + ".sha256", name + ".sha256");
             digest = File.ReadAllText(file + ".sha256").Trim().ToUpperInvariant();
             byte[] bytes = File.ReadAllBytes(file);
             if (bytes.Length == 0 || !PatchFiles.IsHash(digest) || PatchFiles.Digest(bytes) != digest)
-                throw new InvalidDataException("Packaged plugin failed its SHA-256 check.");
+                throw new InvalidDataException("Packaged file failed its SHA-256 check: " + name);
             return bytes;
         }
 
@@ -160,8 +172,12 @@ namespace AwesomeForTheXR.Patcher.Core
             if (r == null || r.OriginalSha256 != baseline ||
                 r.Backup != paths.OriginalRelative || !PatchFiles.IsHash(r.InstalledSha256))
                 throw new InvalidDataException("Unrecognized installation manifest.");
-            if (!(r.Format == AssemblyOnlyFormat && r.NativeSha256 == null) &&
-                !(r.Format == NativePluginFormat && PatchFiles.IsHash(r.NativeSha256)))
+            bool legacy = r.PlayerSha256 == null && r.ForwarderSha256 == null && r.StartupSha256 == null &&
+                ((r.Format == AssemblyOnlyFormat && r.NativeSha256 == null) ||
+                 (r.Format == NativePluginFormat && PatchFiles.IsHash(r.NativeSha256)));
+            bool launchers = hasLaunchers && r.Format == LauncherFormat && PatchFiles.IsHash(r.NativeSha256) &&
+                PatchFiles.IsHash(r.PlayerSha256) && PatchFiles.IsHash(r.ForwarderSha256) && PatchFiles.IsHash(r.StartupSha256);
+            if (!legacy && !launchers)
                 throw new InvalidDataException("Unrecognized installation manifest version or payload hash.");
             return r;
         }
@@ -182,10 +198,19 @@ namespace AwesomeForTheXR.Patcher.Core
                 (j.AfterNativeHash != null && !PatchFiles.IsHash(j.AfterNativeHash)) ||
                 (native != j.BeforeNativeHash && native != j.AfterNativeHash) || j.BeforeNativeHash != old?.NativeSha256)
                 throw new InvalidDataException("Interrupted update conflicts with the native plugin.");
-            bool currentIsOld = current?.InstalledSha256 == old?.InstalledSha256 && current?.NativeSha256 == old?.NativeSha256;
+            bool currentIsOld = current?.InstalledSha256 == old?.InstalledSha256 && current?.NativeSha256 == old?.NativeSha256 &&
+                current?.PlayerSha256 == old?.PlayerSha256 && current?.ForwarderSha256 == old?.ForwarderSha256 &&
+                current?.StartupSha256 == old?.StartupSha256;
             bool currentIsNew = (current?.InstalledSha256 ?? baseline) == j.AfterHash && current?.NativeSha256 == j.AfterNativeHash;
             if ((j.BeforeHash != baseline && j.BeforeHash != old?.InstalledSha256) || (!currentIsOld && !currentIsNew))
                 throw new InvalidDataException("Interrupted update conflicts with the installation manifest.");
+            if (hasLaunchers)
+            {
+                if ((j.Player == null) != (j.Forwarder == null))
+                    throw new InvalidDataException("Incomplete launcher transaction.");
+                Player(paths).CheckJournal(j.Player, old?.PlayerSha256, current?.PlayerSha256, !currentIsOld);
+                Forwarder(paths).CheckJournal(j.Forwarder, old?.ForwarderSha256, current?.ForwarderSha256, !currentIsOld);
+            }
             return j;
         }
 
@@ -226,10 +251,26 @@ namespace AwesomeForTheXR.Patcher.Core
                 if (beforeNativeHash != current?.NativeSha256)
                     throw new IOException("The installed plugin changed during verification.");
                 string afterNativeHash = null;
-                byte[] afterNative = revert ? null : ReadPackage(out afterNativeHash);
+                byte[] afterNative = revert ? null : ReadPackage(InstallPaths.NativeName, out afterNativeHash);
+                string startupHash = null;
+                byte[] playerBytes = null, forwarderBytes = null;
+                ExecutableChange playerChange = null, forwarderChange = null;
+                if (hasLaunchers)
+                {
+                    playerBytes = Player(paths).Original();
+                    forwarderBytes = Forwarder(paths).Original();
+                    if (!revert)
+                    {
+                        playerBytes = PlayerRecipe.Rewrite(playerBytes, ReadPackage(PlayerRecipe.Startup, out startupHash));
+                        forwarderBytes = ReadPackage(PlayerRecipe.Helper, out _);
+                    }
+                    playerChange = Player(paths).Prepare(current?.PlayerSha256, playerBytes);
+                    forwarderChange = Forwarder(paths).Prepare(current?.ForwarderSha256, forwarderBytes);
+                }
 
                 var transaction = new PendingWrite
                 {
+                    Player = playerChange, Forwarder = forwarderChange,
                     BeforeHash = beforeHash,
                     AfterHash = afterHash,
                     PreviousNative = beforeNative,
@@ -245,11 +286,17 @@ namespace AwesomeForTheXR.Patcher.Core
                     // On revert, disable that call before removing the plugin.
                     if (!revert) PatchFiles.Transition(paths.Native, beforeNativeHash, afterNativeHash, afterNative);
                     PatchFiles.Transition(paths.Live, beforeHash, afterHash, candidate);
+                    if (hasLaunchers)
+                    {
+                        Player(paths).Apply(playerChange, playerBytes);
+                        Forwarder(paths).Apply(forwarderChange, forwarderBytes);
+                    }
                     if (revert) PatchFiles.Transition(paths.Native, beforeNativeHash, null, null);
                     if (revert) File.Delete(paths.Record);
                     else
                     {
-                        var record = new InstallRecord { Format = afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
+                        var record = new InstallRecord { Format = hasLaunchers ? LauncherFormat : afterNativeHash == null ? AssemblyOnlyFormat : NativePluginFormat,
+                            PlayerSha256 = playerChange?.After, ForwarderSha256 = forwarderChange?.After, StartupSha256 = startupHash,
                             NativeSha256 = afterNativeHash, OriginalSha256 = baseline,
                             InstalledSha256 = afterHash, Backup = paths.OriginalRelative };
                         PatchFiles.Publish(paths.Record, PatchFiles.Serialize(record), current != null);
@@ -261,6 +308,11 @@ namespace AwesomeForTheXR.Patcher.Core
                     // Keep the journal if recovery itself encounters a changed or locked file.
                     RollBack(paths);
                     throw;
+                }
+                if (hasLaunchers)
+                {
+                    Player(paths).DiscardSnapshot(playerChange);
+                    Forwarder(paths).DiscardSnapshot(forwarderChange);
                 }
             }
         }
@@ -276,12 +328,22 @@ namespace AwesomeForTheXR.Patcher.Core
             string live = PatchFiles.Digest(paths.Live);
             string native = PatchFiles.OptionalDigest(paths.Native);
             var j = ReadJournal(paths, live, native, ReadRecord(paths));
+            if (hasLaunchers)
+            {
+                Forwarder(paths).RollBack(j.Forwarder);
+                Player(paths).RollBack(j.Player);
+            }
             PatchFiles.Transition(paths.Native, native, j.BeforeNativeHash, j.PreviousNative);
             PatchFiles.Transition(paths.Live, live, j.BeforeHash, j.PreviousAssembly);
             if (j.PreviousManifest == null) File.Delete(paths.Record);
             else PatchFiles.Publish(paths.Record, j.PreviousManifest, File.Exists(paths.Record));
             if (PatchFiles.Digest(paths.Live) != j.BeforeHash) throw new IOException("Rollback verification failed.");
             File.Delete(paths.Journal);
+            if (hasLaunchers)
+            {
+                Player(paths).DiscardSnapshot(j.Player);
+                Forwarder(paths).DiscardSnapshot(j.Forwarder);
+            }
         }
     }
 }

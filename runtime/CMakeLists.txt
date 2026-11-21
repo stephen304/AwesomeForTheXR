@@ -6,3 +6,5 @@ if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 endif()
 
 add_subdirectory(plugin)
+add_subdirectory(forwarder)
+add_subdirectory(startup)
