@@ -148,7 +148,32 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             var getHead = display.Methods.Single(m => m.Name == "GetHeadPose").Body.Instructions;
             var rig = module.GetType("OVRCameraRig");
             var anchors = rig.Methods.Single(m => m.Name == "UpdateAnchors").Body.Instructions;
-            var calls = anchors.Where(i => i.Operand is MethodReference m && m.Name == "ApplyPose").ToArray();
+            var prepare = rig.Methods.Single(m => m.Name == "AFTXR_PrepareHeadPose");
+            var pointer = module.GetType("AFTXRMenuPointer");
+            bool Calls(MethodDefinition method, string name) =>
+                method.Body.Instructions.Any(i => i.Operand is MethodReference target && target.Name == name);
+            var sample = pointer.Methods.Single(m => m.Name == "Sample");
+            var head = prepare.Body.Instructions.Single(i => i.Operand is MethodReference m && m.Name == "ApplyPose");
+            var calls = anchors.Where(i => i.Operand is MethodReference m && m.Name == "ApplyPose").Concat(new[] { head }).ToArray();
+            if (!anchors.Any(i => i.Operand == prepare) || !sample.Body.Instructions.Any(i => i.Operand == prepare) ||
+                Calls(sample, "UpdateAnchors") || Calls(prepare, "AFTXR_DesktopUpdate") || Calls(prepare, "ApplyProjection") ||
+                !Calls(prepare, "BeginFrame") || !Calls(rig.Methods.Single(m => m.Name == "OnDisable"), "ReleaseRig") ||
+                !Calls(pointer.Methods.Single(m => m.Name == "Visibility"), "ResetPointer") || !Calls(sample, "ResetPointer"))
+                throw new InvalidOperationException("Pointer lifecycle or shared head prediction is missing.");
+            var register = pointer.Methods.Single(m => m.Name == "RegisterPanel");
+            var setter = rig.Methods.Single(m => m.Name == "AFTXR_SetPointerPanel");
+            var field = rig.Fields.Single(f => f.Name == "aftxrPointerPanel");
+            var enable = rig.Methods.Single(m => m.Name == "OnEnable");
+            if (!Calls(module.GetType("ScaleOculusPlaneByAspect").Methods.Single(m => m.Name == "Start"), "RegisterPanel") ||
+                !register.Body.Instructions.Any(i => i.Operand == setter) ||
+                !setter.Body.Instructions.Any(i => i.OpCode == OpCodes.Stfld && i.Operand == field) ||
+                !enable.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldfld && i.Operand == field) ||
+                !Calls(enable, "SetRig") || !Calls(setter, "SetRig") || Calls(sample, "BindPanel") ||
+                pointer.Methods.Any(m => m.HasBody && Calls(m, "FindObjectsOfType")))
+                throw new InvalidOperationException("The rig must supply its own panel on registration and re-enable.");
+            if (!Calls(module.GetType("InControl.UnityMouseAxisSource").Methods.Single(m => m.Name == "GetValue"), "RawMouseAxis") ||
+                !Calls(module.GetType("InControl.UnityAnalogSource").Methods.Single(m => m.Name == "GetValue"), "GetAxisRaw"))
+                throw new InvalidOperationException("InControl mouse and joystick axes must remain independently routed.");
             var sources = new[] { "get_leftEyeAnchor", "get_rightEyeAnchor", "get_centerEyeAnchor" };
             var ids = new[] { OpCodes.Ldc_I4_0, OpCodes.Ldc_I4_1, OpCodes.Ldc_R8 };
             if (getHead[1].OpCode != OpCodes.Ldc_I4_M1 || ((MethodReference)getHead[2].Operand).Name != "GetEyePose" ||

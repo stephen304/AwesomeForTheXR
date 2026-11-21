@@ -391,6 +391,13 @@ extern "C" int __cdecl AFTXR_BeginCameraFrame(int frame) {
     } catch (const std::exception& e) { failStereo(e.what()); return -1; }
 }
 
+extern "C" int __cdecl AFTXR_PointerHand(int hand, float* pose, uint32_t* generation) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!generation) return 0;
+    *generation = 0;
+    return launch.stereo && pose ? launch.stereo->pointer(hand, pose, *generation) : 0;
+}
+
 extern "C" void __cdecl AFTXR_EyeDescription(int eye, float* desc) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (launch.stereo && unsigned(eye)<2 && desc) launch.stereo->describe(eye,desc);

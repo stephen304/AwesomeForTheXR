@@ -123,7 +123,17 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     }
     // Same head, parallel eye cameras. A change of optics must never steer the player.
     state.eyePoses[0].orientation = state.eyePoses[1].orientation = {0, 0, 0, 1};
+    auto pointer = entry<int (__cdecl*)(int, float*, uint32_t*)>(plugin, "AFTXR_PointerHand");
+    uint32_t generation[2]{};
+    auto hand = [&](int i, float* pose) { return pointer(i, pose, &generation[i]); };
+    float tracked[7]{};
+    check(hand(0,tracked) == 0, "unfocused menu pointer");
+    state.nextEvent = XR_SESSION_STATE_FOCUSED;
+    state.handFlags[1] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT; // Rotation-only controller.
     frame(2);
+    check(hand(0,tracked) == 3 && closeTo(tracked[0],-.04f) && closeTo(tracked[2],.02f), "left aim/trigger");
+    check(hand(1,tracked) == 1 && closeTo(tracked[0],.03f), "right aim/trigger");
+    state.nextEvent = XR_SESSION_STATE_VISIBLE;
     checkPose(-1, {0, 0, 0, 0, 0, 0, 1});
     checkPose(0, {-.04f, .01f, .02f, 0, 0, 0, 1});
 
@@ -131,6 +141,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.head = {{0, .6f, 0, .8f}, {999, 999, 999}};
     state.headFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
     frame(3);
+    check(hand(0,tracked) == 0 && hand(1,tracked) == 0, "stale pointer after focus loss");
     checkPose(-1, {0, 0, 0, 0, -.6f, 0, .8f}); // No invalid position or premature recenter.
     state.head = {{999,999,999,999}, {.2f, 1.5f, -.4f}};
     state.headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT;
@@ -151,6 +162,61 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.eyeFlags = 0; // Head tracking still updates when the runtime temporarily cannot locate the eyes.
     frame(6);
     checkPose(-1, {0, 0, -.1f, 0, 0, 0, 1});
+
+    state.nextEvent = XR_SESSION_STATE_FOCUSED;
+    state.handFlags[0] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    state.handPressed[0] = false;
+    frame(7);
+    check(hand(0,tracked) == 0 && hand(1,tracked) == 1, "inferred release from previously tracked hand");
+    state.handFlags[0] = Fixture::trackedHand;
+    state.handPressed[0] = true;
+    state.handFlags[1] &= ~XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    frame(8);
+    check(hand(0,tracked) == 3 && hand(1,tracked) == 0, "tracking recovery or stale rotation");
+    state.handActive[0] = false;
+    frame(9);
+    check(hand(0,tracked) == 0, "inactive aim");
+    state.handActive[0] = true;
+    state.handFlags[0] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    state.handFlags[1] = Fixture::trackedHand & ~XR_SPACE_LOCATION_POSITION_VALID_BIT;
+    frame(10);
+    check(hand(0,tracked) == 0 && hand(1,tracked) == 0, "temporary aim inactivity erased tracking history");
+    auto before = generation[0];
+    auto other = generation[1];
+    state.handProfiles[0] = nullptr;
+    state.profileChanged = true;
+    frame(11);
+    state.handProfiles[0] = "valve/index_controller";
+    state.profileChanged = true;
+    frame(12);
+    check(hand(0,tracked) == 0 && generation[0] == before, "same profile returned without live position");
+    state.handProfiles[0] = "khr/simple_controller";
+    state.profileChanged = true;
+    frame(13);
+    check(hand(0,tracked) == 3 && generation[0] != before, "replacement rotation-only source");
+    check(hand(1,tracked) == 0 && generation[1] == other, "replacement interrupted the other hand");
+
+    before = generation[0];
+    state.nextEvent = XR_SESSION_STATE_VISIBLE;
+    state.followingEvent = XR_SESSION_STATE_FOCUSED;
+    state.handPressed[0] = false;
+    frame(14);
+    frame(15); // Unity had no pointer consumer in the frame that delivered both events.
+    check(hand(0,tracked) == 1 && generation[0] != before, "dashboard interruption lost before Unity read it");
+    check(hand(1,tracked) == 0 && generation[1] != other, "dashboard interruption missing on other hand");
+
+    state.handFlags[1] = Fixture::trackedHand;
+    state.handPressed[0] = state.handPressed[1] = true;
+    frame(16);
+    check(hand(0,tracked) == 3 && hand(1,tracked) == 3, "both hands held before tracking loss");
+    const auto leftBeforeLoss = generation[0], rightBeforeLoss = generation[1];
+    state.handFlags[1] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    state.handPressed[1] = false;
+    frame(17); // Unity skips the pointer read on the only frame with lost tracking.
+    state.handFlags[1] = Fixture::trackedHand;
+    frame(18);
+    check(hand(1,tracked) == 1 && generation[1] == rightBeforeLoss + 1, "missed right-hand interruption");
+    check(hand(0,tracked) == 3 && generation[0] == leftBeforeLoss, "right-hand loss interrupted the left drag");
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {

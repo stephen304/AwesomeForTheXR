@@ -6,4 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/AwesomeForTheXR.Patcher.Core/AwesomeForTheXR.Patcher.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/AwesomeForTheXR.Patcher.Core/PointerTemplate/PointerButtons.cs" Link="PointerButtons.cs" />
+    <Compile Include="../../src/AwesomeForTheXR.Patcher.Core/PointerTemplate/PointerMouse.cs" Link="PointerMouse.cs" />
+  </ItemGroup>
 </Project>

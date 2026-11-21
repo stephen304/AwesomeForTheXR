@@ -4,6 +4,19 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="AwesomeForTheXR.vrmanifest" LogicalName="AwesomeForTheXR.vrmanifest" />
+    <Compile Remove="PointerTemplate/**/*.cs" />
+    <EmbeddedResource Include="$(BaseIntermediateOutputPath)$(Configuration)/MenuPointer.template.dll" LogicalName="MenuPointer.template.dll" />
     <PackageReference Include="Mono.Cecil" />
+  </ItemGroup>
+  <!-- Compile the injected IL identically in Debug and Release, against signatures only. -->
+  <Target Name="CompileMenuPointer" BeforeTargets="PrepareResourceNames" DependsOnTargets="ResolveReferences"
+          Inputs="@(PointerSource);$(MSBuildProjectFullPath)" Outputs="$(BaseIntermediateOutputPath)$(Configuration)/MenuPointer.template.dll">
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Csc Sources="@(PointerSource)" References="@(ReferencePath)" TargetType="library"
+         OutputAssembly="$(BaseIntermediateOutputPath)$(Configuration)/MenuPointer.template.dll" NoStandardLib="true"
+         Optimize="true" Deterministic="true" DisabledWarnings="0649;0626" />
+  </Target>
+  <ItemGroup>
+    <PointerSource Include="PointerTemplate/**/*.cs" />
   </ItemGroup>
 </Project>

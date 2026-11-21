@@ -9,10 +9,18 @@ struct Fixture {
     ID3D11Texture2D* eyeImages[2]{}; // Borrowed until xrDestroySwapchain.
     unsigned sessionCreates = 0;
     XrSessionState nextEvent = XR_SESSION_STATE_UNKNOWN;
+    XrSessionState followingEvent = XR_SESSION_STATE_UNKNOWN;
+    bool profileChanged = false;
+    const char* handProfiles[2] = {"valve/index_controller", "khr/simple_controller"};
     unsigned starts = 0, stops = 0, frameWaits = 0, projections = 0, emptyFrames = 0;
     unsigned swapchainCreates = 0, swapchainDestroys = 0, releases = 0, sessionDestroys = 0;
     XrPosef head{{0, 0, 0, 1}, {0.1f, 1.4f, -0.2f}};
     XrSpaceLocationFlags headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    static constexpr XrSpaceLocationFlags trackedHand = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT |
+                                                       XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    XrSpaceLocationFlags handFlags[2] = {trackedHand, trackedHand};
+    bool handPressed[2] = {true, false};
+    bool handActive[2] = {true, true};
     XrViewStateFlags eyeFlags = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
     XrPosef eyePoses[2] = {{{0, .28f, 0, .96f}, {.06f, 1.41f, -.22f}},
                            {{0, -.6f, 0, .8f}, {.13f, 1.38f, -.19f}}};

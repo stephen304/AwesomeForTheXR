@@ -271,10 +271,41 @@ namespace AwesomeForTheXR.Patcher.Core
             }
             il.Emit(OpCodes.Ret);
 
-            il = Rewrite(Method(rig, "UpdateAnchors"));
+            var headFrame = new FieldDefinition("aftxrHeadPoseFrame", FieldAttributes.Private, id);
+            rig.Fields.Add(headFrame);
+            var awake = Method(rig, "Awake").Body.GetILProcessor();
+            var first = awake.Body.Instructions[0];
+            awake.InsertBefore(first, awake.Create(OpCodes.Ldarg_0));
+            awake.InsertBefore(first, awake.Create(OpCodes.Ldc_I4_M1));
+            awake.InsertBefore(first, awake.Create(OpCodes.Stfld, headFrame));
+
+            // Menu input can need the head-locked surface before the normal eye/mirror update.
+            var prepare = new MethodDefinition("AFTXR_PrepareHeadPose", MethodAttributes.Assembly | MethodAttributes.HideBySig, none);
+            rig.Methods.Add(prepare);
+            il = prepare.Body.GetILProcessor();
+            var refresh = il.Create(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldfld, headFrame);
+            il.Emit(OpCodes.Call, frameCount);
+            il.Emit(OpCodes.Bne_Un, refresh);
+            il.Emit(OpCodes.Ret);
+            il.Append(refresh);
+            il.Emit(OpCodes.Call, frameCount);
+            il.Emit(OpCodes.Stfld, headFrame);
             var getDisplay = Method(manager, "get_display");
             il.Emit(OpCodes.Call, getDisplay);
             il.Emit(OpCodes.Callvirt, Method(display, "BeginFrame"));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, Method(rig, "get_centerEyeAnchor"));
+            il.Emit(OpCodes.Call, getDisplay);
+            il.Emit(OpCodes.Ldc_R8, 0d);
+            il.Emit(OpCodes.Callvirt, Method(display, "GetHeadPose"));
+            il.Emit(OpCodes.Call, applyPose);
+            il.Emit(OpCodes.Ret);
+
+            il = Rewrite(Method(rig, "UpdateAnchors"));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, prepare);
             foreach (var side in new[] { "left", "right" }) {
                 var eye = side == "left" ? OpCodes.Ldc_I4_0 : OpCodes.Ldc_I4_1;
                 il.Emit(OpCodes.Ldarg_0);
@@ -288,12 +319,6 @@ namespace AwesomeForTheXR.Patcher.Core
                 il.Emit(OpCodes.Callvirt, Method(display, "GetEyePose"));
                 il.Emit(OpCodes.Call, applyPose);
             }
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Call, Method(rig, "get_centerEyeAnchor"));
-            il.Emit(OpCodes.Call, getDisplay);
-            il.Emit(OpCodes.Ldc_R8, 0d);
-            il.Emit(OpCodes.Callvirt, Method(display, "GetHeadPose"));
-            il.Emit(OpCodes.Call, applyPose);
             il.Emit(OpCodes.Ret);
         }
 

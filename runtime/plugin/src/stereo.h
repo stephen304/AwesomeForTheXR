@@ -14,6 +14,8 @@
     X(EnumerateViewConfigurationViews) X(EnumerateEnvironmentBlendModes) X(EnumerateSwapchainFormats) \
     X(CreateSwapchain) X(DestroySwapchain) X(EnumerateSwapchainImages) X(AcquireSwapchainImage) \
     X(WaitSwapchainImage) X(ReleaseSwapchainImage) X(PollEvent) X(BeginSession) X(EndSession) \
+    X(StringToPath) X(CreateActionSet) X(DestroyActionSet) X(CreateAction) X(SuggestInteractionProfileBindings) \
+    X(AttachSessionActionSets) X(GetCurrentInteractionProfile) X(CreateActionSpace) X(SyncActions) X(GetActionStateBoolean) X(GetActionStatePose) \
     X(RequestExitSession) X(WaitFrame) X(BeginFrame) X(LocateViews) X(EndFrame)
 
 class StereoSession {
@@ -25,6 +27,7 @@ public:
     // OVREye.Center in the original game. Only pose queries accept this index.
     static constexpr int headAnchor = -1;
     void pose(int anchor, float* pose) const;
+    int pointer(int hand, float* pose, uint32_t& generation) const;
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
     void recenter() { recenterPending = true; }
     void renderedEye(unsigned eye, IUnknown* texture, int unityFrame);
@@ -48,6 +51,27 @@ private:
     XrInstance instance = XR_NULL_HANDLE;
     XrSession session = XR_NULL_HANDLE;
     XrSpace localSpace = XR_NULL_HANDLE, viewSpace = XR_NULL_HANDLE;
+    XrActionSet pointerSet = XR_NULL_HANDLE;
+    XrAction aim = XR_NULL_HANDLE, select = XR_NULL_HANDLE;
+    struct Hand {
+        XrPath path{}, lastProfile{};
+        uint32_t generation = 0;
+        XrSpace space{};
+        XrPosef pose{};
+        bool hasTrackedPosition = false;
+        bool usable = false, pressed = false;
+
+        void interrupt() {
+            ++generation;
+            usable = pressed = false;
+        }
+    };
+    std::array<Hand, 2> hands{};
+    bool profilesDirty = true;
+    void openPointer();
+    void samplePointer();
+    bool readPointerHand(Hand& hand);
+    void unityPose(const XrPosef& raw, float* p) const;
     XrPosef headPose{{0, 0, 0, 1}, {}};
     XrEnvironmentBlendMode blend{};
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;

@@ -8,6 +8,7 @@ EXPORTS
     AFTXR_IsOpenXRSceneReady
     AFTXR_AbortVrLaunch
     AFTXR_BeginCameraFrame
+    AFTXR_PointerHand
     AFTXR_EyePose
     AFTXR_EyeProjection
     AFTXR_EyeDescription

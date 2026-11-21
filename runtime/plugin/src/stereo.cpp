@@ -85,6 +85,7 @@ void StereoSession::open(PFN_xrGetInstanceProcAddr getProc, XrInstance xr, XrSys
     requireXR("xrCreateReferenceSpace(LOCAL)", CreateReferenceSpace(session, &ref, &localSpace));
     ref.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     requireXR("xrCreateReferenceSpace(VIEW)", CreateReferenceSpace(session, &ref, &viewSpace));
+    openPointer();
     uint32_t count = 0;
     std::array<XrViewConfigurationView,2> config{{{XR_TYPE_VIEW_CONFIGURATION_VIEW},{XR_TYPE_VIEW_CONFIGURATION_VIEW}}};
     requireXR("xrEnumerateViewConfigurationViews", EnumerateViewConfigurationViews(instance, system, stereo, 2, &count, config.data()));
@@ -110,6 +111,125 @@ void StereoSession::open(PFN_xrGetInstanceProcAddr getProc, XrInstance xr, XrSys
                                std::max(1, int(v.recommendedImageRectHeight * scale))};
     }
     if (log) fprintf(log, "OpenXR session ready for Unity eye cameras.\n");
+}
+
+void StereoSession::openPointer() {
+    auto path = [&](const std::string& name) {
+        XrPath value{};
+        requireXR("xrStringToPath", StringToPath(instance, name.c_str(), &value));
+        return value;
+    };
+    XrActionSetCreateInfo set{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(set.actionSetName, "menus");
+    strcpy_s(set.localizedActionSetName, "Menus");
+    requireXR("xrCreateActionSet", CreateActionSet(instance, &set, &pointerSet));
+    const char* users[] = {"/user/hand/left", "/user/hand/right"};
+    XrPath paths[] = {path(users[0]), path(users[1])};
+    auto action = [&](XrActionType type, const char* name, const char* label, XrAction* out) {
+        XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+        info.actionType = type;
+        strcpy_s(info.actionName, name);
+        strcpy_s(info.localizedActionName, label);
+        info.countSubactionPaths = 2;
+        info.subactionPaths = paths;
+        requireXR("xrCreateAction", CreateAction(pointerSet, &info, out));
+    };
+    action(XR_ACTION_TYPE_POSE_INPUT, "aim", "Point at menu", &aim);
+    action(XR_ACTION_TYPE_BOOLEAN_INPUT, "select", "Select or switch pointer hand", &select);
+    struct Profile { const char *name, *button; };
+    for (const Profile profile : {
+        Profile{"khr/simple_controller", "select/click"}, {"oculus/touch_controller", "trigger/value"},
+        {"valve/index_controller", "trigger/value"}, {"htc/vive_controller", "trigger/click"},
+        {"microsoft/motion_controller", "trigger/value"}}) {
+        XrActionSuggestedBinding bindings[4];
+        for (int i = 0; i < 2; ++i) {
+            std::string input = std::string(users[i]) + "/input/";
+            bindings[i*2] = {aim, path(input + "aim/pose")};
+            bindings[i*2+1] = {select, path(input + profile.button)};
+        }
+        XrInteractionProfileSuggestedBinding info{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        info.interactionProfile = path(std::string("/interaction_profiles/") + profile.name);
+        info.countSuggestedBindings = 4;
+        info.suggestedBindings = bindings;
+        auto result = SuggestInteractionProfileBindings(instance, &info);
+        if (result != XR_ERROR_PATH_UNSUPPORTED) requireXR("xrSuggestInteractionProfileBindings", result);
+    }
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    attach.countActionSets = 1;
+    attach.actionSets = &pointerSet;
+    requireXR("xrAttachSessionActionSets", AttachSessionActionSets(session, &attach));
+    for (int i = 0; i < 2; ++i) {
+        hands[i].path = paths[i];
+        XrActionSpaceCreateInfo info{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        info.action = aim;
+        info.subactionPath = paths[i];
+        info.poseInActionSpace.orientation.w = 1;
+        requireXR("xrCreateActionSpace", CreateActionSpace(session, &info, &hands[i].space));
+    }
+    if (log) fprintf(log, "OpenXR menu aim and select actions attached for both hands.\n");
+}
+
+void StereoSession::samplePointer() {
+    XrActiveActionSet active{pointerSet, XR_NULL_PATH};
+    XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+    sync.countActiveActionSets = 1;
+    sync.activeActionSets = &active;
+    auto result = SyncActions(session, &sync);
+    if (result == XR_SESSION_NOT_FOCUSED) {
+        for (auto& hand : hands) hand.interrupt();
+        return;
+    }
+    requireXR("xrSyncActions", result);
+    for (auto& hand : hands) {
+        if (profilesDirty) {
+            XrInteractionProfileState current{XR_TYPE_INTERACTION_PROFILE_STATE};
+            requireXR("xrGetCurrentInteractionProfile", GetCurrentInteractionProfile(session, hand.path, &current));
+            // Keep tracking history across a temporary absence of bindings for this hand.
+            if (current.interactionProfile && current.interactionProfile != hand.lastProfile) {
+                if (hand.lastProfile) {
+                    hand.hasTrackedPosition = false;
+                    hand.interrupt();
+                }
+                hand.lastProfile = current.interactionProfile;
+            }
+        }
+        if (readPointerHand(hand)) hand.usable = true;
+        else if (hand.usable) hand.interrupt(); // Preserve the loss even if Unity skips this frame.
+    }
+    profilesDirty = false;
+}
+
+bool StereoSession::readPointerHand(Hand& hand) {
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+    get.subactionPath = hand.path;
+    get.action = aim;
+    XrActionStatePose tracked{XR_TYPE_ACTION_STATE_POSE};
+    requireXR("xrGetActionStatePose", GetActionStatePose(session, &get, &tracked));
+    if (!tracked.isActive) return false;
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    requireXR("xrLocateSpace(aim)", LocateSpace(hand.space, localSpace, displayTime, &loc));
+    const bool positionTracked = (loc.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0;
+    if (positionTracked) hand.hasTrackedPosition = true;
+    // Rotation-only controllers can supply a valid estimated origin. If this active
+    // source tracked its position, losing that tracking cancels selection until it returns.
+    constexpr auto required = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                              XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+    if ((loc.locationFlags & required) != required || (hand.hasTrackedPosition && !positionTracked)) return false;
+    get.action = select;
+    XrActionStateBoolean button{XR_TYPE_ACTION_STATE_BOOLEAN};
+    requireXR("xrGetActionStateBoolean", GetActionStateBoolean(session, &get, &button));
+    if (!button.isActive) return false;
+    hand.pose = loc.pose;
+    hand.pressed = button.currentState != XR_FALSE;
+    return true;
+}
+
+int StereoSession::pointer(int index, float* p, uint32_t& generation) const {
+    if (unsigned(index) >= hands.size()) return 0;
+    generation = hands[index].generation;
+    if (!hands[index].usable) return 0;
+    unityPose(hands[index].pose, p);
+    return hands[index].pressed ? 3 : 1;
 }
 
 void StereoSession::makeEye(Eye& eye, const D3D11_TEXTURE2D_DESC& desc) {
@@ -237,6 +357,7 @@ bool StereoSession::begin(int unityFrame) {
     if (result != XR_FRAME_DISCARDED) requireXR("xrBeginFrame", result);
     begun = true;
     displayTime = timing.predictedDisplayTime;
+    if (state == XR_SESSION_STATE_FOCUSED) samplePointer();
     if (!timing.shouldRender) return true;
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
     locate.viewConfigurationType = stereo;
@@ -282,7 +403,10 @@ void StereoSession::describe(int i, float* d) const {
 void StereoSession::pose(int anchor, float* p) const {
     std::fill_n(p, 7, 0.f); p[6] = 1;
     if (anchor != headAnchor && !haveViews) return;
-    const auto& raw = anchor == headAnchor ? headPose : views[anchor].pose;
+    unityPose(anchor == headAnchor ? headPose : views[anchor].pose, p);
+}
+
+void StereoSession::unityPose(const XrPosef& raw, float* p) const {
     float c = std::cos(centerYaw), s = std::sin(centerYaw);
     const float x = raw.position.x-center.x, z = raw.position.z-center.z;
     p[0] = c*x-s*z; p[1] = raw.position.y-center.y; p[2] = -(s*x+c*z);
@@ -343,9 +467,15 @@ void StereoSession::poll(bool shuttingDown) {
             finished = true;
             throw std::runtime_error("OpenXR reported instance loss. Check SteamVR and restart the game.");
         }
+        if (event.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED &&
+            reinterpret_cast<const XrEventDataInteractionProfileChanged&>(event).session == session)
+            profilesDirty = true;
         if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) continue;
         auto& change = reinterpret_cast<const XrEventDataSessionStateChanged&>(event);
         if (change.session != session) continue;
+        // poll() can collect both loss and regain before Unity reads either hand.
+        if (state == XR_SESSION_STATE_FOCUSED && change.state != state)
+            for (auto& hand : hands) hand.interrupt();
         state = change.state;
         if (log) fprintf(log, "Session state: %s\n", stateName(state));
         if (state == XR_SESSION_STATE_READY && !running && !shuttingDown) {
@@ -389,10 +519,12 @@ void StereoSession::close() noexcept {
         eye.chain = XR_NULL_HANDLE;
     }
     context.Reset();
+    for (auto& hand : hands) if (hand.space) DestroySpace(hand.space);
     if (viewSpace) DestroySpace(viewSpace);
     if (localSpace) DestroySpace(localSpace);
     viewSpace = localSpace = XR_NULL_HANDLE;
     XrResult result = DestroySession(session);
+    if (pointerSet) DestroyActionSet(pointerSet);
     if (log) fprintf(log, "xrDestroySession: %d; %u stereo projections in %u frames.\n",
                      static_cast<int>(result), submitted, frames);
     session = XR_NULL_HANDLE;

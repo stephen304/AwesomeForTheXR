@@ -6,6 +6,10 @@
 #include <wrl/client.h>
 #include <openxr/openxr_platform.h>
 #include <array>
+#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
 #include <cstring>
 #include "fixture.h"
 
@@ -31,6 +35,106 @@ void expect(bool condition) {
 Eye& eye(XrSwapchain handle) {
     return eyes.at(static_cast<size_t>(handle - 1));
 }
+}
+
+namespace {
+const XrActionSet menuSet = (XrActionSet)14;
+const XrAction aim = (XrAction)15, selectButton = (XrAction)16;
+const char* const users[] = {"/user/hand/left", "/user/hand/right"};
+const XrPath handPaths[] = {1, 2};
+std::map<std::string, XrPath> paths{{users[0], handPaths[0]}, {users[1], handPaths[1]}};
+XrPath pathId(const std::string& name) {
+    return paths.emplace(name, paths.size() + 1).first->second;
+}
+int handIndex(XrPath path) {
+    expect(path == handPaths[0] || path == handPaths[1]);
+    return path == handPaths[1] ? 1 : 0;
+}
+const std::map<std::string, std::string> profiles = {
+    {"khr/simple_controller", "select/click"}, {"htc/vive_controller", "trigger/click"},
+    {"valve/index_controller", "trigger/value"}, {"oculus/touch_controller", "trigger/value"},
+    {"microsoft/motion_controller", "trigger/value"}
+};
+std::set<XrPath> suggested;
+const XrSpace handSpaces[] = {(XrSpace)23,(XrSpace)24};
+bool attached = false;
+}
+
+XRAPI_ATTR XrResult XRAPI_CALL xrStringToPath(XrInstance, const char* name, XrPath* out) {
+    *out = pathId(name);
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSet(XrInstance, const XrActionSetCreateInfo* info, XrActionSet* out) {
+    expect(!strcmp(info->actionSetName,"menus"));
+    *out = menuSet;
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrDestroyActionSet(XrActionSet set) {
+    expect(set == menuSet);
+    attached = false;
+    suggested.clear();
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCreateInfo* info, XrAction* out) {
+    expect(set == menuSet && info->countSubactionPaths == 2 && info->subactionPaths[0] == handPaths[0] &&
+           info->subactionPaths[1] == handPaths[1]);
+    const bool isAim = info->actionType == XR_ACTION_TYPE_POSE_INPUT;
+    expect((isAim || info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT) && !strcmp(info->actionName, isAim ? "aim" : "select"));
+    *out = isAim ? aim : selectButton;
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, const XrInteractionProfileSuggestedBinding* info) {
+    expect(!attached && info->countSuggestedBindings == 4 && suggested.insert(info->interactionProfile).second);
+    for (const auto& profile : profiles) {
+        if (info->interactionProfile != pathId("/interaction_profiles/" + profile.first)) continue;
+        const auto* first = info->suggestedBindings;
+        const auto* end = first + info->countSuggestedBindings;
+        for (const auto* user : users) {
+            const auto input = std::string(user) + "/input/";
+            auto has = [&](XrAction action, XrPath path) {
+                return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
+                    return b.action == action && b.binding == path;
+                });
+            };
+            expect(has(aim, pathId(input + "aim/pose")) && has(selectButton, pathId(input + profile.second)));
+        }
+        return XR_SUCCESS;
+    }
+    expect(false);
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrAttachSessionActionSets(XrSession s, const XrSessionActionSetsAttachInfo* info) {
+    expect(s == session && !attached && info->countActionSets == 1 && info->actionSets[0] == menuSet);
+    expect(suggested.size() == profiles.size());
+    attached = true;
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSpace(XrSession s, const XrActionSpaceCreateInfo* info, XrSpace* out) {
+    expect(s == session && attached && info->action == aim && info->poseInActionSpace.orientation.w == 1);
+    *out = handSpaces[handIndex(info->subactionPath)];
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInfo* info) {
+    expect(s == session && attached && frameOpen && sessionState == XR_SESSION_STATE_FOCUSED &&
+           info->countActiveActionSets == 1 && info->activeActionSets[0].actionSet == menuSet);
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrGetCurrentInteractionProfile(XrSession s, XrPath user, XrInteractionProfileState* state) {
+    expect(s == session && attached && state->type == XR_TYPE_INTERACTION_PROFILE_STATE);
+    const char* profile = currentFixture().handProfiles[handIndex(user)];
+    state->interactionProfile = profile ? pathId(std::string("/interaction_profiles/") + profile) : XR_NULL_PATH;
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStatePose(XrSession, const XrActionStateGetInfo* get, XrActionStatePose* state) {
+    expect(get->action == aim);
+    state->isActive = currentFixture().handActive[handIndex(get->subactionPath)];
+    return XR_SUCCESS;
+}
+XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrActionStateGetInfo* get, XrActionStateBoolean* state) {
+    expect(get->action == selectButton);
+    state->isActive = XR_TRUE;
+    state->currentState = currentFixture().handPressed[handIndex(get->subactionPath)];
+    return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateSession(XrInstance instance, const XrSessionCreateInfo* info, XrSession* out) {
@@ -64,6 +168,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateReferenceSpace(XrSession handle, const Xr
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroySpace(XrSpace handle) {
+    if (handle == handSpaces[0] || handle == handSpaces[1]) return XR_SUCCESS;
     bool& created = handle == localSpace ? localCreated : viewCreated;
     expect((handle == localSpace || handle == viewSpace) && created);
     created = false;
@@ -161,10 +266,19 @@ XRAPI_ATTR XrResult XRAPI_CALL xrReleaseSwapchainImage(XrSwapchain handle, const
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrPollEvent(XrInstance, XrEventDataBuffer* buffer) {
-    auto& next = currentFixture().nextEvent;
+    auto& fixture = currentFixture();
+    if (fixture.profileChanged) {
+        fixture.profileChanged = false;
+        XrEventDataInteractionProfileChanged changed{XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED};
+        changed.session = session;
+        std::memcpy(buffer, &changed, sizeof(changed));
+        return XR_SUCCESS;
+    }
+    auto& next = fixture.nextEvent;
     if (next == XR_SESSION_STATE_UNKNOWN) return XR_EVENT_UNAVAILABLE;
     sessionState = next;
-    next = XR_SESSION_STATE_UNKNOWN;
+    next = fixture.followingEvent;
+    fixture.followingEvent = XR_SESSION_STATE_UNKNOWN;
     XrEventDataSessionStateChanged changed{XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED};
     changed.session = session;
     changed.state = sessionState;
@@ -208,6 +322,12 @@ XRAPI_ATTR XrResult XRAPI_CALL xrBeginFrame(XrSession handle, const XrFrameBegin
 
 XRAPI_ATTR XrResult XRAPI_CALL xrLocateSpace(XrSpace target, XrSpace base, XrTime time, XrSpaceLocation* out) {
     const auto& fixture = currentFixture();
+    if (target == handSpaces[0] || target == handSpaces[1]) {
+        expect(base == localSpace && frameOpen && time == fixture.frameWaits);
+        out->locationFlags = fixture.handFlags[target == handSpaces[1]];
+        out->pose = fixture.eyePoses[target == handSpaces[1]];
+        return XR_SUCCESS;
+    }
     expect(viewCreated && localCreated && target == viewSpace && base == localSpace &&
            frameOpen && time == fixture.frameWaits && out->type == XR_TYPE_SPACE_LOCATION);
     out->locationFlags = fixture.headFlags;
@@ -253,6 +373,17 @@ XRAPI_ATTR XrResult XRAPI_CALL xrEndFrame(XrSession handle, const XrFrameEndInfo
 
 PFN_xrVoidFunction stereoFunction(const char* name) {
 #define MATCH(fn) if (std::strcmp(name, #fn) == 0) return reinterpret_cast<PFN_xrVoidFunction>(static_cast<PFN_##fn>(fn));
+    MATCH(xrStringToPath)
+    MATCH(xrCreateActionSet)
+    MATCH(xrDestroyActionSet)
+    MATCH(xrCreateAction)
+    MATCH(xrSuggestInteractionProfileBindings)
+    MATCH(xrAttachSessionActionSets)
+    MATCH(xrCreateActionSpace)
+    MATCH(xrSyncActions)
+    MATCH(xrGetCurrentInteractionProfile)
+    MATCH(xrGetActionStatePose)
+    MATCH(xrGetActionStateBoolean)
     MATCH(xrCreateSession)
     MATCH(xrDestroySession)
     MATCH(xrCreateReferenceSpace)

@@ -22,6 +22,7 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 if (args.Length != 0 && args.Length != 2)
                     throw new ArgumentException("Optional arguments: <supported game folder> <built patch package folder>");
                 if (args.Length == 2) TestLaunchers(folder.FullName, args[0], args[1]);
+                TestMenuPointer();
                 TestArtworkDiscovery(folder.FullName);
                 TestPatchCycle(folder.FullName);
                 TestNativePlugin(folder.FullName);
