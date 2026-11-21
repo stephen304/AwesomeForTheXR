@@ -113,15 +113,25 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 var enter = loader.Methods.Single(m => m.Name == "AFTXR_EnterOpenXRScene");
                 var check = body.Single(i => i.OpCode == OpCodes.Call && i.Operand == ready);
                 var scene = body.Single(i => i.OpCode == OpCodes.Call && i.Operand == enter);
-                var accepted = (Instruction)check.Next.Operand;
+                var gameplayBranch = check.Next;
+                var accepted = (Instruction)gameplayBranch.Operand;
                 var store = (Instruction)accepted.Next.Operand;
                 var abort = loader.Methods.Single(m => m.Name == "AFTXR_AbortVrLaunch");
-                var rejected = check.Next.Next;
+                var rejected = gameplayBranch.Next;
                 var mode = store.Next;
                 var arcade = mode.Next.Next;
                 var desktop = mode.Next.Operand as Instruction;
-                if (check.Previous.OpCode != OpCodes.Brfalse || check.Previous.Operand != store.Previous ||
-                    store.Previous.OpCode != OpCodes.Ldc_I4_0 || check.Next.OpCode != OpCodes.Brtrue ||
+                var prepared = check.Previous.Previous.Previous;
+                var observer = module.GetType("AFTXREyeCamera");
+                var driver = module.GetType("OVRDisplay").Methods.Single(m => m.Name == "EndFrame").Body.Instructions;
+                var shutdown = module.GetType("OVRManager").Methods.Single(m => m.Name == "OnApplicationQuit").Body.Instructions;
+                if (prepared.OpCode != OpCodes.Brfalse || prepared.Operand != store.Previous ||
+                    check.Previous.Operand != arcade.Next.Operand || check.Previous.Previous.Operand != arcade.Operand ||
+                    !observer.Methods.Single(m => m.Name == "OnPostRender").Body.Instructions
+                        .Any(i => i.Operand is MethodReference fn && fn.Name == "AFTXR_RenderedEye") ||
+                    !driver.Any(i => i.Operand is MethodReference fn && fn.Name == "IssuePluginEvent") ||
+                    !shutdown.Any(i => i.Operand is MethodReference fn && fn.Name == "AFTXR_ReleaseLaunch") ||
+                    store.Previous.OpCode != OpCodes.Ldc_I4_0 || gameplayBranch.OpCode != OpCodes.Brtrue ||
                     accepted.OpCode != OpCodes.Ldc_I4_1 || accepted.Next.OpCode != OpCodes.Br ||
                     rejected.OpCode != OpCodes.Ldnull || rejected.Next.OpCode != OpCodes.Call ||
                     rejected.Next.Operand != abort || rejected.Next.Next.OpCode != OpCodes.Ret ||
@@ -137,7 +147,9 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 if (ready.PInvokeInfo?.EntryPoint != "AFTXR_IsOpenXRSceneReady" ||
                     ready.ReturnType.MetadataType != MetadataType.Int32 ||
                     abort.PInvokeInfo?.EntryPoint != "AFTXR_AbortVrLaunch" ||
-                    !enter.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ret }))
+                    !enter.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ldstr, OpCodes.Call, OpCodes.Ret }) ||
+                    (string)enter.Body.Instructions[0].Operand != "LoaderScene_oculus" ||
+                    ((MethodReference)enter.Body.Instructions[1].Operand).Name != "LoadLevel")
                     throw new InvalidOperationException("The loader must check native graphics readiness before the guarded scene entry.");
             }
         }

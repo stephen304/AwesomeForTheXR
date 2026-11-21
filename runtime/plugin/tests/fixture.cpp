@@ -17,6 +17,8 @@ bool scenario(const char* name) { return std::strcmp(state->scenario, name) == 0
 void expect(bool condition) { if (!condition) state->invalidCall = true; }
 }
 
+Fixture& currentFixture() { return *state; }
+
 extern "C" void __cdecl BindPreflightFixture(Fixture* fixture) { state = fixture; }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateInstance(const XrInstanceCreateInfo* info, XrInstance* out) {
@@ -51,7 +53,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetSystem(XrInstance handle, const XrSystemGetI
     expect(handle == instance && info->type == XR_TYPE_SYSTEM_GET_INFO && !info->next &&
            info->formFactor == XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY);
     if (scenario("unsupported-headset")) return XR_ERROR_FORM_FACTOR_UNSUPPORTED;
-    if (scenario("no-headset") || (scenario("late-headset") && state->systemQueries < 3))
+    if (scenario("late-headset") && state->systemQueries < 3)
         return XR_ERROR_FORM_FACTOR_UNAVAILABLE;
     *out = systemId;
     return XR_SUCCESS;
@@ -74,8 +76,13 @@ static XrResult XRAPI_CALL graphics(XrInstance handle, XrSystemId id, XrGraphics
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance handle, const char* name, PFN_xrVoidFunction* entry) {
-    expect(handle == instance && std::strcmp(name, "xrGetD3D11GraphicsRequirementsKHR") == 0);
-    if (scenario("lookup")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-    *entry = scenario("null-entry") ? nullptr : reinterpret_cast<PFN_xrVoidFunction>(graphics);
+    expect(handle == instance);
+    if (std::strcmp(name, "xrGetD3D11GraphicsRequirementsKHR") == 0) {
+        if (scenario("lookup")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+        *entry = scenario("null-entry") ? nullptr : reinterpret_cast<PFN_xrVoidFunction>(graphics);
+    } else {
+        *entry = stereoFunction(name);
+        if (!*entry) return XR_ERROR_FUNCTION_UNSUPPORTED;
+    }
     return XR_SUCCESS;
 }

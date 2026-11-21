@@ -6,7 +6,7 @@ using System.Text;
 namespace AwesomeForTheXR.Patcher.Core
 {
     // Only the fingerprinted Unity 4.5.5p5 x86 player has these argument readers.
-    // All four relative call sites displace no base relocations.
+    // All five relative call sites displace no base relocations.
     internal static class PlayerRecipe
     {
         internal const string Player = "Awesome.exe";
@@ -19,8 +19,8 @@ namespace AwesomeForTheXR.Patcher.Core
         {
             if (PatchFiles.Digest(original) != PlayerOriginal)
                 throw new InvalidDataException("Unsupported Awesome.exe.");
-            const int header = 0x340, optional = 0x148, sectionRva = 0xba7000, prefix = 20;
-            if (startup.Length <= prefix || startup.Length > 65536 || Encoding.ASCII.GetString(startup, 0, 4) != "AFX3")
+            const int header = 0x340, optional = 0x148, sectionRva = 0xba7000, prefix = 24;
+            if (startup.Length <= prefix || startup.Length > 65536 || Encoding.ASCII.GetString(startup, 0, 4) != "AFX4")
                 throw new InvalidDataException("Unsupported Awesome startup payload.");
             int size = startup.Length - prefix;
             int aligned = (size + 511) & ~511;
@@ -60,6 +60,8 @@ namespace AwesomeForTheXR.Patcher.Core
                     sectionRva, BitConverter.ToInt32(startup, 12), size);
                 WriteCall(writer, original, 0x411fc0, 0x412bc0, new byte[] { 0xe8, 0x7b, 0x49, 0xff, 0xff },
                     sectionRva, BitConverter.ToInt32(startup, 16), size);
+                WriteCall(writer, original, 0x40577c, 0x40637c, new byte[] { 0x89, 0x75, 0xfc, 0xff, 0xd0 },
+                    sectionRva, BitConverter.ToInt32(startup, 20), size);
             }
             return result;
         }

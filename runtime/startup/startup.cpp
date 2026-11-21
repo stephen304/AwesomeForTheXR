@@ -8,14 +8,21 @@ struct LaunchText
     wchar_t vr[4], adapter[9], dx9[12], dx11[13], suffix[64];
     wchar_t otherRenderers[4][16];
     char narrowDx11[13], prepare[24], getStatus[24], abortLaunch[24], title[36], preparedVariable[32], one[2];
+    char threadSafeDx11[32], directGraphics[20];
+    wchar_t graphicsThreadFlags[3][20];
     char selectAdapter[32], setDeviceSlot[32], sceneReady[32];
+    char factory1[20];
+    GUID factory1Id;
     char missing[80], incompatible[80], stateError[80], creationError[80];
 };
 extern "C" const LaunchText launchText = {
     L"-vr", L"-adapter", L"-force-d3d9", L"-force-d3d11", L"Awesome_Data\\Plugins\\AwesomeForTheXR32.dll",
     { L"-force-d3d9-ref", L"-force-opengl", L"-force-gles20", L"-force-gles30" },
     "-force-d3d11", "AFTXR_PrepareLaunch", "AFTXR_GetLaunchStatus", "AFTXR_AbortVrLaunch", "AwesomeForTheXR - VR startup failed", "AFTXR_GRAPHICS_PREPARED", "1",
+    "-force-d3d11-no-singlethreaded", "-force-gfx-direct",
+    { L"-force-gfx-direct", L"-force-gfx-st", L"-force-gfx-mt" },
     "AFTXR_SelectUnityAdapter", "AFTXR_SetUnityDeviceSlot", "AFTXR_IsOpenXRSceneReady",
+    "CreateDXGIFactory1", {0x770aae78, 0xf26f, 0x4dba, {0xa8,0x29,0x25,0x3c,0x83,0xd1,0xb3,0x87}},
     "The XR plugin could not be loaded. Reapply the game patch.",
     "The XR plugin is incompatible. Reapply the game patch.",
     "The game could not pass its VR startup state to Unity.",
@@ -91,7 +98,9 @@ template <typename Char> static int filterArgs(Char** argv, int count, int reque
         }
         else if (!sameFlag(argv[i], text.dx9) && !sameFlag(argv[i], text.dx11) &&
                  !sameFlag(argv[i], text.otherRenderers[0]) && !sameFlag(argv[i], text.otherRenderers[1]) &&
-                 !sameFlag(argv[i], text.otherRenderers[2]) && !sameFlag(argv[i], text.otherRenderers[3]))
+                 !sameFlag(argv[i], text.otherRenderers[2]) && !sameFlag(argv[i], text.otherRenderers[3]) &&
+                 !sameFlag(argv[i], text.graphicsThreadFlags[0]) && !sameFlag(argv[i], text.graphicsThreadFlags[1]) &&
+                 !sameFlag(argv[i], text.graphicsThreadFlags[2]))
             argv[out++] = argv[i];
     }
     if (out < count) argv[out] = nullptr;
@@ -175,7 +184,13 @@ extern "C" void __cdecl NormalizeAwesomeEngineArgs(int* argc, char*** values, wc
         if (sameFlag(wide[i], text.dx11)) ready = true;
     auto heap = gameImport<decltype(&GetProcessHeap)>(image, 0x8562cc)();
     auto copy = static_cast<char**>(gameImport<decltype(&HeapAlloc)>(image, 0x856210)(
-        heap, 0, (*argc + 1) * sizeof(char*)));
+        heap, 0, (*argc + 3) * sizeof(char*)));
+    if (ready && !copy)
+    {
+        gameImport<decltype(&MessageBoxA)>(image, 0x8566e4)(nullptr, text.stateError, text.title,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        gameImport<decltype(&ExitProcess)>(image, 0x856228)(1);
+    }
     if (copy)
     {
         for (int i = 0; i < *argc; ++i) copy[i] = argv[i];
@@ -185,6 +200,16 @@ extern "C" void __cdecl NormalizeAwesomeEngineArgs(int* argc, char*** values, wc
     // If the pointer array allocation fails, compact the existing array.
     // No argument string is allocated or freed by this operation.
     *argc = filterArgs(*values, *argc, request, ready, text, text.narrowDx11);
+    if (ready && copy)
+    {
+        // Unity and the OpenXR runtime both use this device. Unity 4 otherwise
+        // passes D3D11_CREATE_DEVICE_SINGLETHREADED to D3D11CreateDevice.
+        copy[(*argc)++] = const_cast<char*>(text.threadSafeDx11);
+        // Present on the window-owning thread. The legacy render worker can
+        // otherwise wait on a window message while the main thread waits for it.
+        copy[(*argc)++] = const_cast<char*>(text.directGraphics);
+        copy[*argc] = nullptr;
+    }
 }
 
 struct ID3D11Device;
@@ -229,4 +254,20 @@ extern "C" bool __cdecl InitializeAwesomeD3D11(BYTE* image, const LaunchText& te
         MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     gameImport<decltype(&ExitProcess)>(image, 0x856228)(1);
     return false;
+}
+
+// The stock helper stores the returned base interface and uses EnumAdapters.
+// Its factory determines whether the resulting device supports DXGI 1.1 sharing.
+using CreateFactory = HRESULT (WINAPI*)(REFIID, void**);
+extern "C" HRESULT __cdecl CreateAwesomeFactory(const BYTE* image, const LaunchText& text,
+    CreateFactory original, REFIID requested, void** output)
+{
+    char prepared[2] = {};
+    if (gameImport<decltype(&GetEnvironmentVariableA)>(image, 0x856178)(
+            text.preparedVariable, prepared, sizeof(prepared)) != 1 || prepared[0] != '1')
+        return original(requested, output);
+    HMODULE dxgi = *reinterpret_cast<const HMODULE*>(image + 0xa2b4ac);
+    auto create = reinterpret_cast<CreateFactory>(
+        gameImport<decltype(&GetProcAddress)>(image, 0x856114)(dxgi, text.factory1));
+    return create ? create(text.factory1Id, output) : E_NOINTERFACE;
 }

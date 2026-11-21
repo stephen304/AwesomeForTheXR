@@ -1,6 +1,5 @@
 LIBRARY AwesomeForTheXR32
 EXPORTS
-    AFTXR_GetMarkerVersion
     AFTXR_PrepareLaunch
     AFTXR_GetLaunchStatus
     AFTXR_ReleaseLaunch
@@ -8,3 +7,10 @@ EXPORTS
     AFTXR_SetUnityDeviceSlot
     AFTXR_IsOpenXRSceneReady
     AFTXR_AbortVrLaunch
+    AFTXR_BeginCameraFrame
+    AFTXR_EyePose
+    AFTXR_EyeProjection
+    AFTXR_EyeDescription
+    AFTXR_Recenter
+    AFTXR_RenderedEye
+    UnityRenderEvent

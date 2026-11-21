@@ -3,6 +3,7 @@
 .386
 .model flat
 option casemap:none
+EXTERN _CreateAwesomeFactory:PROC
 EXTERN _InitializeAwesomeD3D11:PROC
 EXTERN _NormalizeAwesomeArgs:PROC
 EXTERN _NormalizeAwesomeMonoArgs:PROC
@@ -15,6 +16,7 @@ _StartupTable LABEL BYTE
     DD IMAGEREL monoArgs
     DD IMAGEREL graphicsArgs
     DD IMAGEREL initializeD3D11
+    DD IMAGEREL createFactory
 
 normalize MACRO argcOffset, returnRva, handler
     LOCAL here
@@ -85,4 +87,22 @@ deviceHere:
     call _InitializeAwesomeD3D11
     add esp, 8
     ret
+; Unity already pushed the factory output and IID. Preserve its stdcall ABI.
+createFactory:
+    mov [ebp-4], esi          ; displaced local initialization
+    mov ecx, [esp]
+    sub ecx, 406381h
+    push DWORD PTR [esp+8]   ; output
+    push DWORD PTR [esp+8]   ; requested IID
+    push eax                 ; original CreateDXGIFactory
+    call factoryHere
+factoryHere:
+    pop edx
+    sub edx, IMAGEREL factoryHere
+    add edx, IMAGEREL _launchText
+    push edx
+    push ecx
+    call _CreateAwesomeFactory
+    add esp, 20
+    ret 8
 END

@@ -10,12 +10,17 @@
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_reflection.h>
 #include <cstdio>
+#include <share.h>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
 
+#include "headset_retry.h"
+#include "stereo.h"
+
 namespace {
+using Log = std::unique_ptr<FILE, decltype(&fclose)>;
 static_assert(sizeof(void*) == 4, "Awesome requires the Win32 OpenXR loader.");
 
 struct Launch {
@@ -30,6 +35,11 @@ struct Launch {
     // Own the device named in the session binding after managed startup accepts it.
     Microsoft::WRL::ComPtr<ID3D11Device> unityDevice;
     XrGraphicsBindingD3D11KHR binding{XR_TYPE_GRAPHICS_BINDING_D3D11_KHR};
+    PFN_xrGetInstanceProcAddr getProc = nullptr;
+    Log stereoLog{nullptr, fclose};
+    std::unique_ptr<StereoSession> stereo;
+    bool stereoFailed = false;
+    char stereoError[512]{};
     PFN_xrDestroyInstance destroy = nullptr;
     const char* status = "OpenXR startup failed. See AwesomeForTheXR-launcher.log for details.";
 };
@@ -46,10 +56,9 @@ std::wstring gameDirectory() {
     return slash == std::wstring::npos ? std::wstring() : name.substr(0, slash + 1);
 }
 
-using Log = std::unique_ptr<FILE, decltype(&fclose)>;
 Log openLog(const std::wstring& directory, const wchar_t* mode) {
     FILE* file = nullptr;
-    if (!directory.empty()) _wfopen_s(&file, (directory + L"AwesomeForTheXR-launcher.log").c_str(), mode);
+    if (!directory.empty()) file = _wfsopen((directory + L"AwesomeForTheXR-launcher.log").c_str(), mode, _SH_DENYNO);
     if (file) setvbuf(file, nullptr, _IONBF, 0);
     return Log(file, fclose);
 }
@@ -87,6 +96,8 @@ bool checked(FILE* log, const char* operation, XrResult result) {
 
 // Called on a normal startup/managed thread, never while the Windows loader lock is held.
 void release(FILE* log) {
+    launch.stereo.reset();
+    launch.stereoLog.reset();
     launch.unityDeviceSlot = nullptr;
     launch.binding.device = nullptr;
     launch.unityDevice.Reset();
@@ -130,10 +141,10 @@ bool discover(const std::wstring& directory, FILE* log) {
     PFN_xrGetInstanceProperties getInstanceProperties;
     PFN_xrGetSystem getSystem;
     PFN_xrGetSystemProperties getSystemProperties;
-    PFN_xrGetInstanceProcAddr getProc;
+
     if (!resolve(log, "xrCreateInstance", createInstance) || !resolve(log, "xrDestroyInstance", launch.destroy) ||
         !resolve(log, "xrGetInstanceProperties", getInstanceProperties) || !resolve(log, "xrGetSystem", getSystem) ||
-        !resolve(log, "xrGetSystemProperties", getSystemProperties) || !resolve(log, "xrGetInstanceProcAddr", getProc)) return false;
+        !resolve(log, "xrGetSystemProperties", getSystemProperties) || !resolve(log, "xrGetInstanceProcAddr", launch.getProc)) return false;
 
     const char* extension = XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
     XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
@@ -153,13 +164,8 @@ bool discover(const std::wstring& directory, FILE* log) {
 
     XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};
     systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
-    const ULONGLONG deadline = GetTickCount64() + 10000;
-    XrResult result;
-    for (;;) {
-        result = getSystem(instance, &systemInfo, &launch.system);
-        if (result != XR_ERROR_FORM_FACTOR_UNAVAILABLE || GetTickCount64() >= deadline) break;
-        Sleep(250);
-    }
+    const XrResult result = waitForHeadset(
+        [&] { return getSystem(instance, &systemInfo, &launch.system); }, GetTickCount64, Sleep);
     if (!checked(log, "xrGetSystem", result)) return false;
     XrSystemProperties headset{XR_TYPE_SYSTEM_PROPERTIES};
     if (!checked(log, "xrGetSystemProperties", getSystemProperties(instance, launch.system, &headset))) return false;
@@ -167,7 +173,7 @@ bool discover(const std::wstring& directory, FILE* log) {
 
     PFN_xrVoidFunction entry = nullptr;
     if (!checked(log, "Resolve xrGetD3D11GraphicsRequirementsKHR",
-                 getProc(instance, "xrGetD3D11GraphicsRequirementsKHR", &entry))) return false;
+                 launch.getProc(instance, "xrGetD3D11GraphicsRequirementsKHR", &entry))) return false;
     if (!entry) {
         if (log) fprintf(log, "xrGetInstanceProcAddr returned no function address for xrGetD3D11GraphicsRequirementsKHR.\n");
         return false;
@@ -195,9 +201,9 @@ bool graphicsCall(FILE* log, const char* operation, HRESULT result, const char* 
 }
 
 int selectAdapter(FILE* log) {
-    // Use the same factory interface and zero-based enumeration as Unity 4.5.
-    ComPtr<IDXGIFactory> factory;
-    if (!graphicsCall(log, "CreateDXGIFactory", CreateDXGIFactory(IID_PPV_ARGS(&factory)),
+    // Use the same DXGI 1.1 factory and zero-based EnumAdapters as the patched player.
+    ComPtr<IDXGIFactory1> factory;
+    if (!graphicsCall(log, "CreateDXGIFactory1", CreateDXGIFactory1(IID_PPV_ARGS(&factory)),
                       "Windows could not enumerate the graphics adapters for VR.")) return -1;
     for (UINT i = 0; ; ++i) {
         ComPtr<IDXGIAdapter> adapter;
@@ -234,6 +240,12 @@ bool bindDevice(FILE* log, ID3D11Device* device) {
     WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
     if (log) fprintf(log, "Unity D3D11 device: %s\nActual adapter LUID: %08lX:%08lX\nActual D3D11 feature level: 0x%04X\n",
                      name, static_cast<DWORD>(desc.AdapterLuid.HighPart), desc.AdapterLuid.LowPart, static_cast<unsigned>(level));
+    UINT flags = device->GetCreationFlags();
+    if (log) fprintf(log, "Unity D3D11 creation flags: 0x%08X\n", flags);
+    if (flags & D3D11_CREATE_DEVICE_SINGLETHREADED) {
+        launch.status = "Unity created a single-threaded D3D11 device that cannot be shared with OpenXR.";
+        return false;
+    }
     if (!sameAdapter(desc.AdapterLuid, launch.graphics.adapterLuid)) {
         launch.status = "Unity created its Direct3D 11 device on a different GPU than the headset requires.";
         return false;
@@ -245,11 +257,37 @@ bool bindDevice(FILE* log, ID3D11Device* device) {
     if (!graphicsCall(log, "GetDeviceRemovedReason", device->GetDeviceRemovedReason(),
                       "Unity's Direct3D 11 device was lost during VR startup.")) return false;
 
+    // DXGI 1.0 devices can pass xrEndFrame even when SteamVR cannot synchronize
+    // either eye. Exercise keyed sharing on Unity's actual device before opening XR.
+    D3D11_TEXTURE2D_DESC sync{};
+    sync.Width = sync.Height = sync.ArraySize = sync.MipLevels = sync.SampleDesc.Count = 1;
+    sync.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sync.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    sync.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<IDXGIResource> shared;
+    HANDLE handle = nullptr; // Legacy shared handle is owned by the resource.
+    const char* shareError = "Unity's D3D11 device cannot share eye textures with the VR compositor.";
+    if (!graphicsCall(log, "Create keyed shared texture", device->CreateTexture2D(&sync, nullptr, &texture), shareError) ||
+        !graphicsCall(log, "QueryInterface(IDXGIResource)", texture.As(&shared), shareError) ||
+        !graphicsCall(log, "GetSharedHandle", shared->GetSharedHandle(&handle), shareError)) return false;
+    if (!handle) {
+        launch.status = shareError;
+        return false;
+    }
+    if (log) fprintf(log, "Unity D3D11 keyed texture sharing verified.\n");
+
     launch.unityDevice = device; // One owned reference, independent of Unity's reference.
     launch.binding.device = launch.unityDevice.Get();
     launch.status = "Unity's Direct3D 11 device is ready for an OpenXR session.";
     if (log) fprintf(log, "%s\n", launch.status);
     return true;
+}
+void failStereo(const char* detail) noexcept {
+    std::snprintf(launch.stereoError, sizeof(launch.stereoError), "OpenXR camera rendering failed. %s", detail);
+    launch.status = launch.stereoError;
+    launch.stereoFailed = true;
+    if (launch.stereoLog) fprintf(launch.stereoLog.get(), "%s\n", launch.status);
 }
 } // namespace
 
@@ -329,10 +367,57 @@ extern "C" int __cdecl AFTXR_IsOpenXRSceneReady() {
         if (log) fprintf(log.get(), "Managed startup: validating Unity's D3D11 device.\n");
         ID3D11Device* device = launch.unityDeviceSlot ? *launch.unityDeviceSlot : nullptr;
         launch.unityDeviceSlot = nullptr;
-        if (bindDevice(log.get(), device))
-            launch.status = "Headset rendering is not implemented in this build.";
+        if (!bindDevice(log.get(), device)) return 0;
+        launch.stereoLog = std::move(log);
+        launch.stereo = std::make_unique<StereoSession>();
+        launch.stereo->open(launch.getProc, launch.instance, launch.system, launch.binding, launch.stereoLog.get());
+        return 1; // Session created. The managed loader may now enter the game VR scene.
+    } catch (const std::exception& e) {
+        failStereo(e.what());
     } catch (...) {
         launch.status = "Unity's Direct3D 11 device could not be validated for VR.";
     }
-    return 0; // Step 3 will create the session with launch.binding here.
+    return 0;
+}
+
+
+// Called from Unity's main thread. The VR-only player option -force-gfx-direct
+// also executes the ordered end-of-frame render event on that thread.
+extern "C" int __cdecl AFTXR_BeginCameraFrame(int frame) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.stereoFailed || !launch.stereo) return -1;
+    try {
+        return launch.stereo->begin(frame) ? 1 : 0;
+    } catch (const std::exception& e) { failStereo(e.what()); return -1; }
+}
+
+extern "C" void __cdecl AFTXR_EyeDescription(int eye, float* desc) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.stereo && unsigned(eye)<2 && desc) launch.stereo->describe(eye,desc);
+}
+extern "C" void __cdecl AFTXR_EyePose(int eye, float* pose) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.stereo && unsigned(eye)<2 && pose) launch.stereo->pose(eye,pose);
+}
+extern "C" void __cdecl AFTXR_EyeProjection(int eye, float nearClip, float farClip, float* matrix) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.stereo && unsigned(eye)<2 && matrix) launch.stereo->projection(eye,nearClip,farClip,matrix);
+}
+extern "C" void __cdecl AFTXR_Recenter() {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.stereo) launch.stereo->recenter();
+}
+extern "C" void __cdecl AFTXR_RenderedEye(int eye, IUnknown* texture, int frame) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed) return;
+    try { launch.stereo->renderedEye(eye,texture,frame); }
+    catch (const std::exception& e) { failStereo(e.what()); }
+}
+
+extern "C" void __cdecl UnityRenderEvent(int eventId) {
+    if (eventId != 0x41585234) return;
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed) return;
+    try { launch.stereo->submit(); }
+    catch (const std::exception& e) { failStereo(e.what()); }
 }

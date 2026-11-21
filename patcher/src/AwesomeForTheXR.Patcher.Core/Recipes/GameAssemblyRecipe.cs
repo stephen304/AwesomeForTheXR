@@ -7,10 +7,10 @@ using Mono.Cecil.Cil;
 namespace AwesomeForTheXR.Patcher.Core
 {
     // One recipe for the fingerprinted Unity 4.5.5p5 Windows build.
-    internal static class TestMarkerRecipe
+    internal static class GameAssemblyRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "C683D678EE6D1F82FA7ACC6C6F31E12A4044F26DD1B6BF1EDED89EF4452A9CBA";
+        internal const string PatchedHash = "583D025B3BF77900CFC8980F9B95F60A91588F6F307764808269DE0C300C951B";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -120,13 +120,17 @@ namespace AwesomeForTheXR.Patcher.Core
                 PInvokeInfo = new PInvokeInfo(PInvokeAttributes.CallConvCdecl | PInvokeAttributes.NoMangle,
                     "AFTXR_AbortVrLaunch", plugin)
             };
+            abortLaunch.Attributes = (abortLaunch.Attributes & ~MethodAttributes.MemberAccessMask) | MethodAttributes.Assembly;
             abortLaunch.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
             awake.DeclaringType.Methods.Add(abortLaunch);
 
             var enterScene = new MethodDefinition("AFTXR_EnterOpenXRScene", attrs, module.TypeSystem.Void);
             awake.DeclaringType.Methods.Add(enterScene);
-            // Future: enter the ported scene once its legacy callbacks have replacements.
-            enterScene.Body.GetILProcessor().Emit(OpCodes.Ret);
+            var enter = enterScene.Body.GetILProcessor();
+            enter.Emit(OpCodes.Ldstr, "LoaderScene_oculus");
+            enter.Emit(OpCodes.Call, load);
+            enter.Emit(OpCodes.Ret);
+            CameraRecipe.Apply(module, plugin, abortLaunch);
 
             var il = awake.Body.GetILProcessor();
             var noGraphics = il.Create(OpCodes.Ldc_I4_0);
@@ -169,6 +173,11 @@ namespace AwesomeForTheXR.Patcher.Core
             il.Append(arcadeError);
             il.Emit(OpCodes.Call, abortLaunch);
             il.Emit(OpCodes.Ret);
+
+            // Reject arcade VR before opening the OpenXR session.
+            il.InsertBefore(checkScene, il.Create(OpCodes.Ldsfld, arcadeFlag));
+            il.InsertBefore(checkScene, il.Create(OpCodes.Brtrue, arcadeError));
+
         }
 
         private static void AddMenuBadge(TypeDefinition menu, FieldDefinition status,

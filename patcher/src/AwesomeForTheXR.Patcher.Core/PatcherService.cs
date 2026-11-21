@@ -38,7 +38,7 @@ namespace AwesomeForTheXR.Patcher.Core
         }
 
         private PatcherService(string packageDirectory) : this(
-            TestMarkerRecipe.OriginalHash, TestMarkerRecipe.PatchedHash, TestMarkerRecipe.Rewrite,
+            GameAssemblyRecipe.OriginalHash, GameAssemblyRecipe.PatchedHash, GameAssemblyRecipe.Rewrite,
             packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory)))
         {
             hasLaunchers = true;
