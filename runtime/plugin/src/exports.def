@@ -4,4 +4,7 @@ EXPORTS
     AFTXR_PrepareLaunch
     AFTXR_GetLaunchStatus
     AFTXR_ReleaseLaunch
+    AFTXR_SelectUnityAdapter
+    AFTXR_SetUnityDeviceSlot
+    AFTXR_IsOpenXRSceneReady
     AFTXR_AbortVrLaunch

@@ -68,8 +68,8 @@ static XrResult XRAPI_CALL graphics(XrInstance handle, XrSystemId id, XrGraphics
     ++state->graphicsQueries;
     expect(handle == instance && id == systemId && req->type == XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR && !req->next);
     if (scenario("requirements")) return XR_ERROR_RUNTIME_FAILURE;
-    req->adapterLuid = {0xABCD1234, 0x1234};
-    req->minFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+    req->adapterLuid = state->adapterLuid;
+    req->minFeatureLevel = static_cast<D3D_FEATURE_LEVEL>(state->minimumLevel);
     return XR_SUCCESS;
 }
 

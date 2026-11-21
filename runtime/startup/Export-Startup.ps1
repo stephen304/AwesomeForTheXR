@@ -26,7 +26,8 @@ $table = $raw + (U32 ($opt + 16)) - $rva
 $engine = (U32 $table) - $rva
 $mono = (U32 ($table + 4)) - $rva
 $graphics = (U32 ($table + 8)) - $rva
-if ($graphics -lt 0 -or $graphics -ge $size -or $engine -ge $size -or $mono -ge $size -or $engine -lt 0 -or $mono -lt 0) {
+$device = (U32 ($table + 12)) - $rva
+if ($device -lt 0 -or $device -ge $size -or $graphics -lt 0 -or $graphics -ge $size -or $engine -ge $size -or $mono -ge $size -or $engine -lt 0 -or $mono -lt 0) {
     throw 'Invalid startup entry table.'
 }
 $debugRva = U32 ($opt + 96 + 6 * 8)
@@ -48,9 +49,10 @@ if ($debugSize) {
 $stream = [IO.File]::Create($Output)
 try {
     $writer = New-Object IO.BinaryWriter($stream)
-    $writer.Write([Text.Encoding]::ASCII.GetBytes('AFX2'))
+    $writer.Write([Text.Encoding]::ASCII.GetBytes('AFX3'))
     $writer.Write([int]$engine)
     $writer.Write([int]$mono)
     $writer.Write([int]$graphics)
+    $writer.Write([int]$device)
     $writer.Write($bytes, [int]$raw, [int]$size)
 } finally { $stream.Dispose() }

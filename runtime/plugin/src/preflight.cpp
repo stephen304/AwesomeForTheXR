@@ -5,6 +5,7 @@
 #define XR_NO_PROTOTYPES
 #include <windows.h>
 #include <d3d11.h>
+#include <wrl/client.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_reflection.h>
@@ -24,6 +25,11 @@ struct Launch {
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
     XrGraphicsRequirementsD3D11KHR graphics{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR};
+    ID3D11Device* const* unityDeviceSlot = nullptr; // Lives in the player image.
+    bool deviceChecked = false;
+    // Own the device named in the session binding after managed startup accepts it.
+    Microsoft::WRL::ComPtr<ID3D11Device> unityDevice;
+    XrGraphicsBindingD3D11KHR binding{XR_TYPE_GRAPHICS_BINDING_D3D11_KHR};
     PFN_xrDestroyInstance destroy = nullptr;
     const char* status = "OpenXR startup failed. See AwesomeForTheXR-launcher.log for details.";
 };
@@ -81,6 +87,9 @@ bool checked(FILE* log, const char* operation, XrResult result) {
 
 // Called on a normal startup/managed thread, never while the Windows loader lock is held.
 void release(FILE* log) {
+    launch.unityDeviceSlot = nullptr;
+    launch.binding.device = nullptr;
+    launch.unityDevice.Reset();
     bool canUnload = true;
     if (launch.instance != XR_NULL_HANDLE) {
         XrResult result = launch.destroy(launch.instance);
@@ -171,6 +180,77 @@ bool discover(const std::wstring& directory, FILE* log) {
     launch.status = "OpenXR graphics requirements are ready.";
     return true;
 }
+
+using Microsoft::WRL::ComPtr;
+
+bool sameAdapter(LUID left, LUID right) {
+    return left.HighPart == right.HighPart && left.LowPart == right.LowPart;
+}
+
+bool graphicsCall(FILE* log, const char* operation, HRESULT result, const char* failure) {
+    if (SUCCEEDED(result)) return true;
+    if (log) fprintf(log, "%s: HRESULT 0x%08lX\n", operation, static_cast<DWORD>(result));
+    launch.status = failure;
+    return false;
+}
+
+int selectAdapter(FILE* log) {
+    // Use the same factory interface and zero-based enumeration as Unity 4.5.
+    ComPtr<IDXGIFactory> factory;
+    if (!graphicsCall(log, "CreateDXGIFactory", CreateDXGIFactory(IID_PPV_ARGS(&factory)),
+                      "Windows could not enumerate the graphics adapters for VR.")) return -1;
+    for (UINT i = 0; ; ++i) {
+        ComPtr<IDXGIAdapter> adapter;
+        HRESULT hr = factory->EnumAdapters(i, &adapter);
+        if (hr == DXGI_ERROR_NOT_FOUND) break;
+        if (!graphicsCall(log, "EnumAdapters", hr, "Windows could not enumerate the graphics adapters for VR.")) return -1;
+        DXGI_ADAPTER_DESC desc{};
+        if (!graphicsCall(log, "Selected adapter GetDesc", adapter->GetDesc(&desc),
+                          "Windows could not identify a graphics adapter for VR.")) return -1;
+        if (sameAdapter(desc.AdapterLuid, launch.graphics.adapterLuid)) {
+            if (log) fprintf(log, "Selected Unity DXGI adapter index: %u\n", i);
+            return static_cast<int>(i);
+        }
+    }
+    launch.status = "The graphics adapter required by the headset is unavailable to Unity.";
+    return -1;
+}
+
+bool bindDevice(FILE* log, ID3D11Device* device) {
+    if (!device) {
+        launch.status = "Unity did not provide a Direct3D 11 device for the headset.";
+        return false;
+    }
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    DXGI_ADAPTER_DESC desc{};
+    const char* identify = "Unity's Direct3D 11 graphics adapter could not be identified.";
+    if (!graphicsCall(log, "QueryInterface(IDXGIDevice)", device->QueryInterface(IID_PPV_ARGS(&dxgi)), identify) ||
+        !graphicsCall(log, "GetAdapter", dxgi->GetAdapter(&adapter), identify) ||
+        !graphicsCall(log, "Unity adapter GetDesc", adapter->GetDesc(&desc), identify)) return false;
+
+    const auto level = device->GetFeatureLevel();
+    char name[512]{};
+    WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
+    if (log) fprintf(log, "Unity D3D11 device: %s\nActual adapter LUID: %08lX:%08lX\nActual D3D11 feature level: 0x%04X\n",
+                     name, static_cast<DWORD>(desc.AdapterLuid.HighPart), desc.AdapterLuid.LowPart, static_cast<unsigned>(level));
+    if (!sameAdapter(desc.AdapterLuid, launch.graphics.adapterLuid)) {
+        launch.status = "Unity created its Direct3D 11 device on a different GPU than the headset requires.";
+        return false;
+    }
+    if (level < launch.graphics.minFeatureLevel) {
+        launch.status = "Unity's Direct3D 11 device does not meet the headset's minimum feature level.";
+        return false;
+    }
+    if (!graphicsCall(log, "GetDeviceRemovedReason", device->GetDeviceRemovedReason(),
+                      "Unity's Direct3D 11 device was lost during VR startup.")) return false;
+
+    launch.unityDevice = device; // One owned reference, independent of Unity's reference.
+    launch.binding.device = launch.unityDevice.Get();
+    launch.status = "Unity's Direct3D 11 device is ready for an OpenXR session.";
+    if (log) fprintf(log, "%s\n", launch.status);
+    return true;
+}
 } // namespace
 
 extern "C" int __cdecl AFTXR_PrepareLaunch() {
@@ -191,6 +271,23 @@ extern "C" int __cdecl AFTXR_PrepareLaunch() {
     return launch.prepared ? 1 : 0;
 }
 
+extern "C" int __cdecl AFTXR_SelectUnityAdapter() {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.prepared) return -1;
+    try {
+        auto log = openLog(gameDirectory(), L"a");
+        return selectAdapter(log.get());
+    } catch (...) {
+        launch.status = "Windows could not enumerate the graphics adapters for VR.";
+        return -1;
+    }
+}
+
+extern "C" void __cdecl AFTXR_SetUnityDeviceSlot(ID3D11Device* const* slot) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (launch.prepared && !launch.deviceChecked) launch.unityDeviceSlot = slot;
+}
+
 extern "C" const char* __cdecl AFTXR_GetLaunchStatus() {
     std::lock_guard<std::mutex> lock(launchMutex);
     return launch.status;
@@ -209,6 +306,8 @@ extern "C" void __cdecl AFTXR_ReleaseLaunch() {
 }
 
 extern "C" [[noreturn]] void __cdecl AFTXR_AbortVrLaunch(const char* reason) {
+    // Managed scene readiness leaves its specific failure in the plugin.
+    if (!reason) reason = AFTXR_GetLaunchStatus();
     AFTXR_ReleaseLaunch();
     try {
         auto log = openLog(gameDirectory(), L"a");
@@ -219,4 +318,21 @@ extern "C" [[noreturn]] void __cdecl AFTXR_AbortVrLaunch(const char* reason) {
     MessageBoxA(GetActiveWindow(), reason, "AwesomeForTheXR - VR startup failed",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     ExitProcess(1);
+}
+
+extern "C" int __cdecl AFTXR_IsOpenXRSceneReady() {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.prepared || launch.deviceChecked) return 0;
+    launch.deviceChecked = true;
+    try {
+        auto log = openLog(gameDirectory(), L"a");
+        if (log) fprintf(log.get(), "Managed startup: validating Unity's D3D11 device.\n");
+        ID3D11Device* device = launch.unityDeviceSlot ? *launch.unityDeviceSlot : nullptr;
+        launch.unityDeviceSlot = nullptr;
+        if (bindDevice(log.get(), device))
+            launch.status = "Headset rendering is not implemented in this build.";
+    } catch (...) {
+        launch.status = "Unity's Direct3D 11 device could not be validated for VR.";
+    }
+    return 0; // Step 3 will create the session with launch.binding here.
 }

@@ -1,7 +1,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <d3d11.h>
+#include <wrl/client.h>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -46,6 +49,84 @@ const Expected cases[] = {
     {"null-entry",         false, true,   1, 0, "OpenXR startup failed. See AwesomeForTheXR-launcher.log for details.",               "no function address for xrGetD3D11GraphicsRequirementsKHR"},
     {"requirements",       false, true,   1, 1, "OpenXR startup failed. See AwesomeForTheXR-launcher.log for details.",               "xrGetD3D11GraphicsRequirementsKHR: XR_ERROR_RUNTIME_FAILURE"},
 };
+
+void testDevice(const wchar_t* pluginPath, const std::filesystem::path& folder, const std::string& scenario) {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IDXGIFactory> factory;
+    check(SUCCEEDED(CreateDXGIFactory(IID_PPV_ARGS(&factory))), "DXGI factory");
+    // Prefer a non-default adapter if it can create a device. This also covers
+    // the Basic Render Driver on machines exposing it through this DXGI interface.
+    UINT index = 0;
+    ComPtr<ID3D11Device> device;
+    DXGI_ADAPTER_DESC desc{};
+    for (UINT i = 0; ; ++i) {
+        ComPtr<IDXGIAdapter> adapter;
+        HRESULT hr = factory->EnumAdapters(i, &adapter);
+        if (hr == DXGI_ERROR_NOT_FOUND) break;
+        check(SUCCEEDED(hr), "DXGI enumeration");
+        ComPtr<ID3D11Device> candidate;
+        if (FAILED(D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0,
+                                     D3D11_SDK_VERSION, &candidate, nullptr, nullptr))) continue;
+        check(SUCCEEDED(adapter->GetDesc(&desc)), "adapter description");
+        device = candidate;
+        index = i;
+        if (i > 0) break;
+    }
+    check(device.Get() != nullptr, "no test D3D11 device");
+
+    auto fixture = LoadLibraryW((folder / "openxr_loader.dll").c_str());
+    auto plugin = LoadLibraryW(pluginPath);
+    check(fixture && plugin, "graphics test DLLs");
+    Fixture state{scenario.c_str()};
+    state.adapterLuid = desc.AdapterLuid;
+    state.minimumLevel = device->GetFeatureLevel();
+    if (scenario == "device-wrong-adapter") state.adapterLuid.HighPart ^= 0x40000000;
+    if (scenario == "device-low-level") state.minimumLevel = D3D_FEATURE_LEVEL_12_2;
+    entry<void (__cdecl*)(Fixture*)>(fixture, "BindPreflightFixture")(&state);
+    auto select = entry<int (__cdecl*)()>(plugin, "AFTXR_SelectUnityAdapter");
+    auto setSlot = entry<void (__cdecl*)(ID3D11Device* const*)>(plugin, "AFTXR_SetUnityDeviceSlot");
+    auto ready = entry<int (__cdecl*)()>(plugin, "AFTXR_IsOpenXRSceneReady");
+    auto status = entry<const char* (__cdecl*)()>(plugin, "AFTXR_GetLaunchStatus");
+    auto finish = entry<void (__cdecl*)()>(plugin, "AFTXR_ReleaseLaunch");
+    auto refs = [&] { device->AddRef(); return device->Release(); };
+    auto before = refs();
+    ID3D11Device* current = nullptr;
+    check(select() == -1 && ready() == 0, "graphics accepted before preparation");
+    check(entry<int (__cdecl*)()>(plugin, "AFTXR_PrepareLaunch")() == 1, "prepare graphics fixture");
+    if (scenario == "device-wrong-adapter") {
+        check(select() == -1 && strstr(status(), "unavailable"), "could not reject missing adapter");
+        // Independently exercise the scene check with an actual device on the wrong GPU.
+    } else {
+        check(select() == static_cast<int>(index), "incorrect Unity adapter index");
+    }
+
+    // Unity owns the slot. Its contents at registration must never be acquired or cached.
+    const bool missing = scenario == "device-null";
+    current = missing ? device.Get() : nullptr;
+    setSlot(&current);
+    check(refs() == before, "took a Unity device reference before managed startup");
+    current = missing ? nullptr : device.Get();
+    check(ready() == 0, "scene opened before session creation");
+    const bool valid = scenario == "device-match";
+    const char* expected = "Headset rendering is not implemented in this build.";
+    if (missing) expected = "Unity did not provide a Direct3D 11 device for the headset.";
+    if (scenario == "device-wrong-adapter") expected = "Unity created its Direct3D 11 device on a different GPU than the headset requires.";
+    if (scenario == "device-low-level") expected = "Unity's Direct3D 11 device does not meet the headset's minimum feature level.";
+    check(std::string(status()) == expected, "wrong managed startup diagnostic");
+    check(refs() == before + (valid ? 1 : 0), "incorrect device ownership after validation");
+
+    current = missing ? device.Get() : nullptr;
+    check(ready() == 0 && std::string(status()) == expected, "repeated scene check changed its result");
+    std::ifstream input(folder / "AwesomeForTheXR-launcher.log");
+    std::string log{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const char* marker = "Managed startup: validating Unity's D3D11 device.";
+    check(log.find(marker) != log.npos && log.find(marker) == log.rfind(marker), "expected exactly one device check");
+    finish();
+    check(refs() == before, "device reference survived cleanup");
+    check(state.destroys == 1 && !state.invalidCall && select() == -1, "graphics cleanup");
+    FreeLibrary(plugin);
+    FreeLibrary(fixture);
+}
 
 void run(const wchar_t* pluginPath, const std::filesystem::path& folder, const Expected& test) {
     // Hold the fixture while reading counters, then drop our reference to check
@@ -109,6 +190,10 @@ int wmain(int argc, wchar_t** argv) {
         check(argc == 3, "expected plugin path and scenario");
         auto folder = std::filesystem::absolute(argv[0]).parent_path();
         auto scenario = std::filesystem::path(argv[2]).string();
+        if (scenario.find("device-") == 0) {
+            testDevice(argv[1], folder, scenario);
+            return 0;
+        }
         for (const auto& test : cases) {
             if (scenario == test.scenario) {
                 run(argv[1], folder, test);

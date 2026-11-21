@@ -5,11 +5,13 @@ set_target_properties(PreflightFixture PROPERTIES OUTPUT_NAME openxr_loader)
 target_include_directories(PreflightFixture PRIVATE "${openxr_package_SOURCE_DIR}/include")
 
 add_executable(PreflightTests tests.cpp)
+target_link_libraries(PreflightTests PRIVATE dxgi d3d11)
 target_compile_features(PreflightTests PRIVATE cxx_std_17)
 add_dependencies(PreflightTests PreflightFixture AwesomeForTheXR32)
 
 foreach(scenario IN ITEMS success destroy-failure late-headset no-headset unsupported-headset no-runtime
-        no-extension no-api runtime-properties system-properties lookup null-entry requirements)
+        no-extension no-api runtime-properties system-properties lookup null-entry requirements
+        device-match device-wrong-adapter device-low-level device-null)
     add_test(NAME preflight.${scenario}
         COMMAND PreflightTests $<TARGET_FILE:AwesomeForTheXR32> ${scenario})
     # The production plugin writes its log next to the process executable.

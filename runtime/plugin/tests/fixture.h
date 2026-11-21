@@ -5,4 +5,6 @@ struct Fixture {
     const char* scenario;
     unsigned creates = 0, systemQueries = 0, graphicsQueries = 0, destroys = 0;
     bool invalidCall = false;
+    LUID adapterLuid{0xABCD1234, 0x1234};
+    unsigned minimumLevel = 0xB000;
 };

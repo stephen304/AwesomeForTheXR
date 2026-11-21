@@ -6,7 +6,7 @@ using System.Text;
 namespace AwesomeForTheXR.Patcher.Core
 {
     // Only the fingerprinted Unity 4.5.5p5 x86 player has these argument readers.
-    // The two wide readers and narrow graphics registration displace no base relocations.
+    // All four relative call sites displace no base relocations.
     internal static class PlayerRecipe
     {
         internal const string Player = "Awesome.exe";
@@ -19,8 +19,8 @@ namespace AwesomeForTheXR.Patcher.Core
         {
             if (PatchFiles.Digest(original) != PlayerOriginal)
                 throw new InvalidDataException("Unsupported Awesome.exe.");
-            const int header = 0x340, optional = 0x148, sectionRva = 0xba7000, prefix = 16;
-            if (startup.Length <= prefix || startup.Length > 65536 || Encoding.ASCII.GetString(startup, 0, 4) != "AFX2")
+            const int header = 0x340, optional = 0x148, sectionRva = 0xba7000, prefix = 20;
+            if (startup.Length <= prefix || startup.Length > 65536 || Encoding.ASCII.GetString(startup, 0, 4) != "AFX3")
                 throw new InvalidDataException("Unsupported Awesome startup payload.");
             int size = startup.Length - prefix;
             int aligned = (size + 511) & ~511;
@@ -58,6 +58,8 @@ namespace AwesomeForTheXR.Patcher.Core
                     sectionRva, BitConverter.ToInt32(startup, 8), size);
                 WriteCall(writer, original, 0x1f2ae8, 0x1f36e8, new byte[] { 0xe8, 0x83, 0xa2, 0x00, 0x00 },
                     sectionRva, BitConverter.ToInt32(startup, 12), size);
+                WriteCall(writer, original, 0x411fc0, 0x412bc0, new byte[] { 0xe8, 0x7b, 0x49, 0xff, 0xff },
+                    sectionRva, BitConverter.ToInt32(startup, 16), size);
             }
             return result;
         }
@@ -66,7 +68,7 @@ namespace AwesomeForTheXR.Patcher.Core
             byte[] expected, int section, int entry, int size)
         {
             if (entry < 0 || entry >= size || !original.Skip(offset).Take(expected.Length).SequenceEqual(expected))
-                throw new InvalidDataException("Unexpected startup entry or Unity argument reader.");
+                throw new InvalidDataException("Unexpected startup entry or Unity call site.");
             writer.BaseStream.Position = offset;
             writer.Write((byte)0xe8);
             writer.Write(section + entry - (rva + 5));

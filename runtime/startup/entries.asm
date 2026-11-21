@@ -3,6 +3,7 @@
 .386
 .model flat
 option casemap:none
+EXTERN _InitializeAwesomeD3D11:PROC
 EXTERN _NormalizeAwesomeArgs:PROC
 EXTERN _NormalizeAwesomeMonoArgs:PROC
 EXTERN _launchText:BYTE
@@ -13,6 +14,7 @@ _StartupTable LABEL BYTE
     DD IMAGEREL engineArgs
     DD IMAGEREL monoArgs
     DD IMAGEREL graphicsArgs
+    DD IMAGEREL initializeD3D11
 
 normalize MACRO argcOffset, returnRva, handler
     LOCAL here
@@ -67,5 +69,20 @@ graphicsHere:
     push ecx
     call _NormalizeAwesomeEngineArgs
     add esp, 24
+    ret
+; Wrap the sole call to the stock, argument-free D3D11 initializer. Its
+; caller tests AL. All nonvolatile registers retain the stock x86 ABI.
+initializeD3D11:
+    mov eax, [esp]
+    sub eax, 412bc5h
+    call deviceHere
+deviceHere:
+    pop edx
+    sub edx, IMAGEREL deviceHere
+    add edx, IMAGEREL _launchText
+    push edx
+    push eax
+    call _InitializeAwesomeD3D11
+    add esp, 8
     ret
 END

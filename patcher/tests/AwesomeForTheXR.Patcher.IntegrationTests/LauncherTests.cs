@@ -123,7 +123,7 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                 if (check.Previous.OpCode != OpCodes.Brfalse || check.Previous.Operand != store.Previous ||
                     store.Previous.OpCode != OpCodes.Ldc_I4_0 || check.Next.OpCode != OpCodes.Brtrue ||
                     accepted.OpCode != OpCodes.Ldc_I4_1 || accepted.Next.OpCode != OpCodes.Br ||
-                    rejected.OpCode != OpCodes.Ldstr || rejected.Next.OpCode != OpCodes.Call ||
+                    rejected.OpCode != OpCodes.Ldnull || rejected.Next.OpCode != OpCodes.Call ||
                     rejected.Next.Operand != abort || rejected.Next.Next.OpCode != OpCodes.Ret ||
                     store.OpCode != OpCodes.Stsfld || mode.OpCode != OpCodes.Ldsfld || mode.Operand != store.Operand ||
                     ((FieldReference)mode.Operand).Name != "isVRSupportEnabled" || mode.Next.OpCode != OpCodes.Brfalse ||
@@ -134,10 +134,11 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
                     body.Any(i => i.Operand is MethodReference m && m.Name == "LoadLevel"))
                     throw new InvalidOperationException("The patched loader lost its guarded OpenXR scene entry.");
 
-                if (!ready.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ldc_I4_0, OpCodes.Ret }) ||
+                if (ready.PInvokeInfo?.EntryPoint != "AFTXR_IsOpenXRSceneReady" ||
+                    ready.ReturnType.MetadataType != MetadataType.Int32 ||
                     abort.PInvokeInfo?.EntryPoint != "AFTXR_AbortVrLaunch" ||
                     !enter.Body.Instructions.Select(i => i.OpCode).SequenceEqual(new[] { OpCodes.Ret }))
-                    throw new InvalidOperationException("The desktop milestone must keep both OpenXR scene hooks inactive.");
+                    throw new InvalidOperationException("The loader must check native graphics readiness before the guarded scene entry.");
             }
         }
     }

@@ -10,7 +10,7 @@ namespace AwesomeForTheXR.Patcher.Core
     internal static class TestMarkerRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "AC32BD9CD35DFDEEE41144FAAB430524D300DF204FA78D645A1F1C8708677B50";
+        internal const string PatchedHash = "C683D678EE6D1F82FA7ACC6C6F31E12A4044F26DD1B6BF1EDED89EF4452A9CBA";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -102,12 +102,17 @@ namespace AwesomeForTheXR.Patcher.Core
                 "System.Boolean System.String::op_Equality(System.String,System.String)");
 
             var attrs = MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.HideBySig;
-            var sceneReady = new MethodDefinition("AFTXR_IsOpenXRSceneReady", attrs, module.TypeSystem.Boolean);
-            awake.DeclaringType.Methods.Add(sceneReady);
-            // Future: validate Unity's actual D3D11 device and session eligibility.
-            // A successful graphics preflight alone cannot enable the stock VR rig.
             var plugin = new ModuleReference("AwesomeForTheXR32");
             module.ModuleReferences.Add(plugin);
+            // Mono marshals a native 32-bit result without platform bool width assumptions.
+            var sceneReady = new MethodDefinition("AFTXR_IsOpenXRSceneReady", attrs | MethodAttributes.PInvokeImpl,
+                module.TypeSystem.Int32)
+            {
+                ImplAttributes = MethodImplAttributes.PreserveSig,
+                PInvokeInfo = new PInvokeInfo(PInvokeAttributes.CallConvCdecl | PInvokeAttributes.NoMangle,
+                    "AFTXR_IsOpenXRSceneReady", plugin)
+            };
+            awake.DeclaringType.Methods.Add(sceneReady);
             var abortLaunch = new MethodDefinition("AFTXR_AbortVrLaunch", attrs | MethodAttributes.PInvokeImpl,
                 module.TypeSystem.Void)
             {
@@ -117,9 +122,6 @@ namespace AwesomeForTheXR.Patcher.Core
             };
             abortLaunch.Parameters.Add(new ParameterDefinition(module.TypeSystem.String));
             awake.DeclaringType.Methods.Add(abortLaunch);
-            var readyIL = sceneReady.Body.GetILProcessor();
-            readyIL.Emit(OpCodes.Ldc_I4_0);
-            readyIL.Emit(OpCodes.Ret);
 
             var enterScene = new MethodDefinition("AFTXR_EnterOpenXRScene", attrs, module.TypeSystem.Void);
             awake.DeclaringType.Methods.Add(enterScene);
@@ -140,7 +142,8 @@ namespace AwesomeForTheXR.Patcher.Core
             checkScene.Operand = sceneReady;
             var readyToEnter = il.Create(OpCodes.Ldc_I4_1);
             il.InsertBefore(oldStore, il.Create(OpCodes.Brtrue, readyToEnter));
-            il.InsertBefore(oldStore, il.Create(OpCodes.Ldstr, "Headset rendering is not implemented in this build."));
+            // A null reason reports the diagnostic set by the native readiness check.
+            il.InsertBefore(oldStore, il.Create(OpCodes.Ldnull));
             il.InsertBefore(oldStore, il.Create(OpCodes.Call, abortLaunch));
             il.InsertBefore(oldStore, il.Create(OpCodes.Ret));
             il.InsertBefore(oldStore, readyToEnter);

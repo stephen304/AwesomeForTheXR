@@ -8,15 +8,18 @@ struct LaunchText
     wchar_t vr[4], adapter[9], dx9[12], dx11[13], suffix[64];
     wchar_t otherRenderers[4][16];
     char narrowDx11[13], prepare[24], getStatus[24], abortLaunch[24], title[36], preparedVariable[32], one[2];
-    char missing[80], incompatible[80], stateError[80];
+    char selectAdapter[32], setDeviceSlot[32], sceneReady[32];
+    char missing[80], incompatible[80], stateError[80], creationError[80];
 };
 extern "C" const LaunchText launchText = {
     L"-vr", L"-adapter", L"-force-d3d9", L"-force-d3d11", L"Awesome_Data\\Plugins\\AwesomeForTheXR32.dll",
     { L"-force-d3d9-ref", L"-force-opengl", L"-force-gles20", L"-force-gles30" },
     "-force-d3d11", "AFTXR_PrepareLaunch", "AFTXR_GetLaunchStatus", "AFTXR_AbortVrLaunch", "AwesomeForTheXR - VR startup failed", "AFTXR_GRAPHICS_PREPARED", "1",
+    "AFTXR_SelectUnityAdapter", "AFTXR_SetUnityDeviceSlot", "AFTXR_IsOpenXRSceneReady",
     "The XR plugin could not be loaded. Reapply the game patch.",
     "The XR plugin is incompatible. Reapply the game patch.",
-    "The game could not pass its VR startup state to Unity."
+    "The game could not pass its VR startup state to Unity.",
+    "Unity could not create a Direct3D 11 device for the headset."
 };
 
 template <typename T> static T gameImport(const BYTE* image, DWORD rva)
@@ -116,7 +119,8 @@ extern "C" void __cdecl NormalizeAwesomeArgs(wchar_t** argv, int* argc, const BY
         auto status = reinterpret_cast<Status>(getProc(plugin, text.getStatus));
         auto abortLaunch = reinterpret_cast<Abort>(getProc(plugin, text.abortLaunch));
         reason = text.incompatible;
-        if (prepare && status && abortLaunch)
+        if (prepare && status && abortLaunch && getProc(plugin, text.selectAdapter) &&
+            getProc(plugin, text.setDeviceSlot) && getProc(plugin, text.sceneReady))
         {
             if (prepare() == 1)
             {
@@ -181,4 +185,48 @@ extern "C" void __cdecl NormalizeAwesomeEngineArgs(int* argc, char*** values, wc
     // If the pointer array allocation fails, compact the existing array.
     // No argument string is allocated or freed by this operation.
     *argc = filterArgs(*values, *argc, request, ready, text, text.narrowDx11);
+}
+
+struct ID3D11Device;
+
+// The fingerprinted player uses a zero-based IDXGIFactory::EnumAdapters index,
+// and stores the device returned by D3D11CreateDevice in this process-wide slot.
+extern "C" bool __cdecl InitializeAwesomeD3D11(BYTE* image, const LaunchText& text)
+{
+    auto initialize = reinterpret_cast<bool (__cdecl*)()>(image + 0x407540);
+    char value[2] = {};
+    if (gameImport<decltype(&GetEnvironmentVariableA)>(image, 0x856178)(
+            text.preparedVariable, value, sizeof(value)) != 1 || value[0] != '1')
+        return initialize();
+
+    auto plugin = findPlugin(image, text);
+    auto getProc = gameImport<decltype(&GetProcAddress)>(image, 0x856114);
+    if (plugin)
+    {
+        auto selectAdapter = reinterpret_cast<int (__cdecl*)()>(getProc(plugin, text.selectAdapter));
+        auto setDeviceSlot = reinterpret_cast<void (__cdecl*)(ID3D11Device* const*)>(getProc(plugin, text.setDeviceSlot));
+        auto status = reinterpret_cast<const char* (__cdecl*)()>(getProc(plugin, text.getStatus));
+        auto abortLaunch = reinterpret_cast<void (__cdecl*)(const char*)>(getProc(plugin, text.abortLaunch));
+        if (selectAdapter && setDeviceSlot && status && abortLaunch)
+        {
+            int index = selectAdapter();
+            const char* reason = text.creationError;
+            if (index < 0) reason = status();
+            else
+            {
+                *reinterpret_cast<int*>(image + 0xa2b498) = index;
+                if (initialize())
+                {
+                    // Pass the location only. Managed scene startup reads it after the selector.
+                    setDeviceSlot(reinterpret_cast<ID3D11Device* const*>(image + 0xa2b4b0));
+                    return true;
+                }
+            }
+            abortLaunch(reason);
+        }
+    }
+    gameImport<decltype(&MessageBoxA)>(image, 0x8566e4)(nullptr, text.incompatible, text.title,
+        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    gameImport<decltype(&ExitProcess)>(image, 0x856228)(1);
+    return false;
 }
