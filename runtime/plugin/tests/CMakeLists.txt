@@ -12,7 +12,7 @@ add_dependencies(PreflightTests PreflightFixture AwesomeForTheXR32)
 
 foreach(scenario IN ITEMS success destroy-failure late-headset no-headset unsupported-headset no-runtime
         no-extension no-api runtime-properties system-properties lookup null-entry requirements
-        device-match device-wrong-adapter device-low-level device-null device-single-thread stereo-resume-exit stereo-loss)
+        device-match device-wrong-adapter device-low-level device-null device-single-thread stereo-resume-exit stereo-loss stereo-geometry)
     add_test(NAME preflight.${scenario}
         COMMAND PreflightTests $<TARGET_FILE:AwesomeForTheXR32> ${scenario})
     # The production plugin writes its log next to the process executable.

@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -85,6 +86,71 @@ void checkEyePixels(ID3D11Device* device, ID3D11Texture2D* output, const Pixels&
                          std::memcmp(pixels + read.RowPitch, source.data(), 2 * sizeof(UINT)) == 0;
     context->Unmap(copy.Get(), 0);
     check(flipped, "wrong eye or vertical orientation in submitted texture");
+}
+
+void testHeadGeometry(HMODULE plugin, Fixture& state) {
+    auto begin = entry<int (__cdecl*)(int)>(plugin, "AFTXR_BeginCameraFrame");
+    auto pose = entry<void (__cdecl*)(int, float*)>(plugin, "AFTXR_EyePose");
+    auto projection = entry<void (__cdecl*)(int, float, float, float*)>(plugin, "AFTXR_EyeProjection");
+    auto description = entry<void (__cdecl*)(int, float*)>(plugin, "AFTXR_EyeDescription");
+    auto recenter = entry<void (__cdecl*)()>(plugin, "AFTXR_Recenter");
+    auto submit = entry<void (__cdecl*)(int)>(plugin, "UnityRenderEvent");
+    auto closeTo = [](float actual, float expected) { return std::abs(actual - expected) < 1.e-4f; };
+    auto checkPose = [&](int anchor, std::array<float,7> expected) {
+        float actual[7];
+        pose(anchor, actual);
+        for (int i = 0; i < 7; ++i) check(closeTo(actual[i], expected[i]), "wrong recentered Unity anchor pose");
+    };
+    auto frame = [&](int number) {
+        check(begin(number) == 1, "begin geometry frame");
+        submit(0x41585234);
+    };
+    state.nextEvent = XR_SESSION_STATE_READY;
+    frame(1);
+    checkPose(-1, {0, 0, 0, 0, 0, 0, 1});
+    checkPose(0, {-.04f, .01f, .02f, 0, -.28f, 0, .96f});
+    checkPose(1, {.03f, -.02f, -.01f, 0, .6f, 0, .8f});
+    for (int i = 0; i < 2; ++i) {
+        float desc[4], m[16];
+        description(i, desc);
+        projection(i, .1f, 100.f, m);
+        check(desc[0] == (i ? 1100 : 1200) && desc[1] == (i ? 1300 : 1250), "wrong target size");
+        const auto& f = state.eyeFovs[i];
+        // The four runtime boundary rays must map to the four edges of this eye's clip rectangle.
+        check(closeTo(m[0]*std::tan(f.angleLeft)-m[8], -1) && closeTo(m[0]*std::tan(f.angleRight)-m[8], 1) &&
+              closeTo(m[5]*std::tan(f.angleDown)-m[9], -1) && closeTo(m[5]*std::tan(f.angleUp)-m[9], 1),
+              "per-eye off-axis projection");
+    }
+    // Same head, parallel eye cameras. A change of optics must never steer the player.
+    state.eyePoses[0].orientation = state.eyePoses[1].orientation = {0, 0, 0, 1};
+    frame(2);
+    checkPose(-1, {0, 0, 0, 0, 0, 0, 1});
+    checkPose(0, {-.04f, .01f, .02f, 0, 0, 0, 1});
+
+    recenter();
+    state.head = {{0, .6f, 0, .8f}, {999, 999, 999}};
+    state.headFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    frame(3);
+    checkPose(-1, {0, 0, 0, 0, -.6f, 0, .8f}); // No invalid position or premature recenter.
+    state.head = {{999,999,999,999}, {.2f, 1.5f, -.4f}};
+    state.headFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT;
+    frame(4);
+    checkPose(-1, {.1f, .1f, .2f, 0, -.6f, 0, .8f});
+
+    // Yaw 90 degrees, looking straight up. Recenter removes translation and yaw, keeping pitch.
+    state.head.orientation = {.5f, .5f, -.5f, .5f};
+    state.headFlags |= XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    frame(5);
+    const float half = std::sqrt(.5f);
+    checkPose(-1, {0, 0, 0, -half, 0, 0, half});
+    auto l = state.eyePoses[0].position;
+    checkPose(0, {state.head.position.z-l.z, l.y-state.head.position.y, state.head.position.x-l.x,
+                  0, half, 0, half});
+    state.head.position.x += .1f;
+    state.head.orientation = {0, half, 0, half};
+    state.eyeFlags = 0; // Head tracking still updates when the runtime temporarily cannot locate the eyes.
+    frame(6);
+    checkPose(-1, {0, 0, -.1f, 0, 0, 0, 1});
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {
@@ -201,10 +267,11 @@ void testDevice(const wchar_t* pluginPath, const std::filesystem::path& folder, 
     setSlot(&current);
     check(refs() == before, "took a Unity device reference before managed startup");
     current = missing ? nullptr : device.Get();
-    if (scenario == "stereo-resume-exit" || scenario == "stereo-loss") {
+    if (scenario.find("stereo-") == 0) {
         const int accepted = ready();
         check(accepted == 1, status());
-        testFrames(plugin, device.Get(), state, scenario == "stereo-loss");
+        if (scenario == "stereo-geometry") testHeadGeometry(plugin, state);
+        else testFrames(plugin, device.Get(), state, scenario == "stereo-loss");
         finish();
         check(state.swapchainDestroys == state.swapchainCreates && state.sessionDestroys == 1 && state.destroys == 1 &&
               !state.invalidCall, "incorrect stereo lifetime or OpenXR call order");

@@ -11,7 +11,8 @@
 
 namespace {
 const XrSession session = (XrSession)1;
-const XrSpace space = (XrSpace)2;
+const XrSpace localSpace = (XrSpace)2, viewSpace = (XrSpace)3;
+bool localCreated = false, viewCreated = false;
 constexpr auto stereo = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
 constexpr auto format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
@@ -44,19 +45,28 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateSession(XrInstance instance, const XrSess
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroySession(XrSession handle) {
-    expect(handle == session && !frameOpen && !eyes[0].texture && !eyes[1].texture);
+    expect(handle == session && !frameOpen && !eyes[0].texture && !eyes[1].texture && !localCreated && !viewCreated);
     ++currentFixture().sessionDestroys;
     return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateInfo* info, XrSpace* out) {
-    expect(handle == session && info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL);
-    *out = space;
+    const XrPosef identity{{0, 0, 0, 1}, {}};
+    expect(handle == session && info->type == XR_TYPE_REFERENCE_SPACE_CREATE_INFO &&
+           std::memcmp(&info->poseInReferenceSpace, &identity, sizeof(identity)) == 0);
+    const bool local = info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL;
+    if (!local && info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_VIEW) return XR_ERROR_REFERENCE_SPACE_UNSUPPORTED;
+    bool& created = local ? localCreated : viewCreated;
+    expect(!created);
+    created = true;
+    *out = local ? localSpace : viewSpace;
     return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroySpace(XrSpace handle) {
-    expect(handle == space);
+    bool& created = handle == localSpace ? localCreated : viewCreated;
+    expect((handle == localSpace || handle == viewSpace) && created);
+    created = false;
     return XR_SUCCESS;
 }
 
@@ -67,8 +77,8 @@ XRAPI_ATTR XrResult XRAPI_CALL xrEnumerateViewConfigurationViews(XrInstance, XrS
     if (capacity == 0) return XR_SUCCESS;
     if (capacity < *count) return XR_ERROR_SIZE_INSUFFICIENT;
     for (unsigned i = 0; i < *count; ++i) {
-        views[i].maxImageRectWidth = views[i].recommendedImageRectWidth = 2;
-        views[i].maxImageRectHeight = views[i].recommendedImageRectHeight = 2;
+        views[i].maxImageRectWidth = views[i].recommendedImageRectWidth = i ? 1100 : 1200;
+        views[i].maxImageRectHeight = views[i].recommendedImageRectHeight = i ? 1300 : 1250;
         views[i].maxSwapchainSampleCount = views[i].recommendedSwapchainSampleCount = 1;
     }
     return XR_SUCCESS;
@@ -196,16 +206,25 @@ XRAPI_ATTR XrResult XRAPI_CALL xrBeginFrame(XrSession handle, const XrFrameBegin
     return XR_SUCCESS;
 }
 
+XRAPI_ATTR XrResult XRAPI_CALL xrLocateSpace(XrSpace target, XrSpace base, XrTime time, XrSpaceLocation* out) {
+    const auto& fixture = currentFixture();
+    expect(viewCreated && localCreated && target == viewSpace && base == localSpace &&
+           frameOpen && time == fixture.frameWaits && out->type == XR_TYPE_SPACE_LOCATION);
+    out->locationFlags = fixture.headFlags;
+    out->pose = fixture.head;
+    return XR_SUCCESS;
+}
+
 XRAPI_ATTR XrResult XRAPI_CALL xrLocateViews(XrSession handle, const XrViewLocateInfo* info, XrViewState* tracking,
     uint32_t capacity, uint32_t* count, XrView* views) {
-    expect(handle == session && frameOpen && info->space == space && info->displayTime == currentFixture().frameWaits);
+    expect(handle == session && frameOpen && info->space == localSpace && info->displayTime == currentFixture().frameWaits);
     *count = 2;
     if (capacity < *count) return XR_ERROR_SIZE_INSUFFICIENT;
-    tracking->viewStateFlags = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+    const auto& fixture = currentFixture();
+    tracking->viewStateFlags = fixture.eyeFlags;
     for (unsigned i = 0; i < *count; ++i) {
-        views[i].pose.orientation.w = 1;
-        views[i].pose.position.x = i ? 0.03f : -0.03f;
-        views[i].fov = {-0.7f, 0.7f, 0.7f, -0.7f};
+        views[i].pose = fixture.eyePoses[i];
+        views[i].fov = fixture.eyeFovs[i];
     }
     return XR_SUCCESS;
 }
@@ -219,13 +238,14 @@ XRAPI_ATTR XrResult XRAPI_CALL xrEndFrame(XrSession handle, const XrFrameEndInfo
         return XR_SUCCESS;
     }
     const auto* layer = reinterpret_cast<const XrCompositionLayerProjection*>(info->layers[0]);
-    expect(info->layerCount == 1 && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION && layer->space == space);
+    expect(info->layerCount == 1 && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION && layer->space == localSpace);
     if (layer->viewCount != 2) return XR_ERROR_VALIDATION_FAILURE;
     for (unsigned i = 0; i < 2; ++i) {
         const auto& view = layer->views[i];
         expect(view.subImage.swapchain == i + 1 && !eyes[i].acquired &&
                view.subImage.imageRect.extent.width == 2 && view.subImage.imageRect.extent.height == 2 &&
-               view.pose.position.x == (i ? 0.03f : -0.03f));
+               std::memcmp(&view.pose, &fixture.eyePoses[i], sizeof(view.pose)) == 0 &&
+               std::memcmp(&view.fov, &fixture.eyeFovs[i], sizeof(view.fov)) == 0);
     }
     ++fixture.projections;
     return XR_SUCCESS;
@@ -252,6 +272,7 @@ PFN_xrVoidFunction stereoFunction(const char* name) {
     MATCH(xrRequestExitSession)
     MATCH(xrWaitFrame)
     MATCH(xrBeginFrame)
+    MATCH(xrLocateSpace)
     MATCH(xrLocateViews)
     MATCH(xrEndFrame)
 #undef MATCH

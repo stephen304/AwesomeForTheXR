@@ -103,10 +103,41 @@ namespace AwesomeForTheXR.Patcher.IntegrationTests
             Console.WriteLine("PASS: executable install, mid-install rollback, repair, tamper detection and offline revert.");
         }
 
+        private static void CheckHeadAnchors(ModuleDefinition module)
+        {
+            var display = module.GetType("OVRDisplay");
+            var getHead = display.Methods.Single(m => m.Name == "GetHeadPose").Body.Instructions;
+            var rig = module.GetType("OVRCameraRig");
+            var anchors = rig.Methods.Single(m => m.Name == "UpdateAnchors").Body.Instructions;
+            var calls = anchors.Where(i => i.Operand is MethodReference m && m.Name == "ApplyPose").ToArray();
+            var sources = new[] { "get_leftEyeAnchor", "get_rightEyeAnchor", "get_centerEyeAnchor" };
+            var ids = new[] { OpCodes.Ldc_I4_0, OpCodes.Ldc_I4_1, OpCodes.Ldc_R8 };
+            if (getHead[1].OpCode != OpCodes.Ldc_I4_M1 || ((MethodReference)getHead[2].Operand).Name != "GetEyePose" ||
+                calls.Length != 3)
+                throw new InvalidOperationException("Missing dedicated center pose.");
+            for (int i = 0; i < calls.Length; ++i)
+            {
+                var read = calls[i].Previous;
+                if (((MethodReference)read.Operand).Name != (i == 2 ? "GetHeadPose" : "GetEyePose") ||
+                    read.Previous.OpCode != ids[i] || ((MethodReference)read.Previous.Previous.Previous.Operand).Name != sources[i])
+                    throw new InvalidOperationException("Unity anchor received another viewpoint's pose.");
+            }
+            foreach (var target in new[] { "Player.TagGraffiti", "PlayerProximity.CastMouseRay" })
+            {
+                var names = target.Split('.');
+                var body = module.GetType(names[0]).Methods.Single(m => m.Name == names[1]).Body.Instructions;
+                var ray = body.Single(i => i.Operand is MethodReference m && m.Name == "HeadRay");
+                if (((FieldReference)ray.Previous.Operand).Name != "aftxrHeadAnchor" ||
+                    !body.Any(i => i.Operand is MethodReference m && m.Name == "ScreenPointToRay"))
+                    throw new InvalidOperationException("Missing head or desktop aim in " + target);
+            }
+        }
+
         private static void CheckSceneGuards(string path)
         {
             using (var module = ModuleDefinition.ReadModule(path))
             {
+                CheckHeadAnchors(module);
                 var loader = module.GetType("OculusCheckLoader");
                 var body = loader.Methods.Single(m => m.Name == "Awake").Body.Instructions;
                 var ready = loader.Methods.Single(m => m.Name == "AFTXR_IsOpenXRSceneReady");

@@ -397,7 +397,7 @@ extern "C" void __cdecl AFTXR_EyeDescription(int eye, float* desc) {
 }
 extern "C" void __cdecl AFTXR_EyePose(int eye, float* pose) {
     std::lock_guard<std::mutex> lock(launchMutex);
-    if (launch.stereo && unsigned(eye)<2 && pose) launch.stereo->pose(eye,pose);
+    if (launch.stereo && eye >= StereoSession::headAnchor && eye < 2 && pose) launch.stereo->pose(eye,pose);
 }
 extern "C" void __cdecl AFTXR_EyeProjection(int eye, float nearClip, float farClip, float* matrix) {
     std::lock_guard<std::mutex> lock(launchMutex);

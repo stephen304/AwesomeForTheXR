@@ -21,6 +21,8 @@ namespace AwesomeForTheXR.Patcher.Core
             recipe.PatchDisplay();
             recipe.PatchManager();
             recipe.PatchRig();
+            recipe.MoveHeadAttachments();
+            recipe.PatchGameplayHead();
         }
 
         private CameraRecipe(ModuleDefinition module, ModuleReference plugin, MethodDefinition abort)
@@ -107,6 +109,13 @@ namespace AwesomeForTheXR.Patcher.Core
             il.Emit(OpCodes.Ldloca_S, eyePose.Body.Variables[0]);
             il.Emit(OpCodes.Call, getPose);
             il.Emit(OpCodes.Ldloc_0);
+            il.Emit(OpCodes.Ret);
+
+            // Both managed APIs use the one prediction made by BeginFrame. OVREye.Center is -1.
+            il = Rewrite(Method(display, "GetHeadPose"));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldc_I4_M1);
+            il.Emit(OpCodes.Call, eyePose);
             il.Emit(OpCodes.Ret);
 
             var matrix = UnityType("Matrix4x4");
@@ -250,17 +259,162 @@ namespace AwesomeForTheXR.Patcher.Core
             il.Emit(OpCodes.Callvirt,Unity("Camera","set_projectionMatrix",none,true,UnityType("Matrix4x4")));
             il.Emit(OpCodes.Ret);
 
-            var anchors=Method(rig,"UpdateAnchors");
-            var first=anchors.Body.Instructions.First();
-            il=anchors.Body.GetILProcessor();
-            il.InsertBefore(first,il.Create(OpCodes.Call,Method(manager,"get_display")));
-            il.InsertBefore(first,il.Create(OpCodes.Callvirt,Method(display,"BeginFrame")));
-            foreach(var field in new[]{"leftEyeCamera","rightEyeCamera"}) {
-                il.InsertBefore(first,il.Create(OpCodes.Ldarg_0));
-                il.InsertBefore(first,il.Create(OpCodes.Ldfld,Field(rig,field)));
-                il.InsertBefore(first,il.Create(field=="leftEyeCamera" ? OpCodes.Ldc_I4_0 : OpCodes.Ldc_I4_1));
-                il.InsertBefore(first,il.Create(OpCodes.Call,apply));
+            var pose = module.GetType("OVRPose");
+            var applyPose = Managed("ApplyPose", true, none, UnityType("Transform"), pose);
+            il = applyPose.Body.GetILProcessor();
+            foreach (var field in new[] { "position", "orientation" }) {
+                var value = Field(pose, field);
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldarga_S, applyPose.Parameters[1]);
+                il.Emit(OpCodes.Ldfld, value);
+                var setter = field == "position" ? "set_localPosition" : "set_localRotation";
+                il.Emit(OpCodes.Callvirt, Unity("Transform", setter, none, true, value.FieldType));
             }
+            il.Emit(OpCodes.Ret);
+
+            il = Rewrite(Method(rig, "UpdateAnchors"));
+            var getDisplay = Method(manager, "get_display");
+            il.Emit(OpCodes.Call, getDisplay);
+            il.Emit(OpCodes.Callvirt, Method(display, "BeginFrame"));
+            foreach (var side in new[] { "left", "right" }) {
+                var eye = side == "left" ? OpCodes.Ldc_I4_0 : OpCodes.Ldc_I4_1;
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldfld, Field(rig, side + "EyeCamera"));
+                il.Emit(eye);
+                il.Emit(OpCodes.Call, apply);
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Call, Method(rig, "get_" + side + "EyeAnchor"));
+                il.Emit(OpCodes.Call, getDisplay);
+                il.Emit(eye);
+                il.Emit(OpCodes.Callvirt, Method(display, "GetEyePose"));
+                il.Emit(OpCodes.Call, applyPose);
+            }
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, Method(rig, "get_centerEyeAnchor"));
+            il.Emit(OpCodes.Call, getDisplay);
+            il.Emit(OpCodes.Ldc_R8, 0d);
+            il.Emit(OpCodes.Callvirt, Method(display, "GetHeadPose"));
+            il.Emit(OpCodes.Call, applyPose);
+            il.Emit(OpCodes.Ret);
+        }
+
+        private void MoveHeadAttachments()
+        {
+            // The stock prefabs put shared menu geometry and the jump HUD under the left camera.
+            // Awake has just aligned all three siblings at the rig origin. Reparent once here,
+            // before UpdateAnchors applies any eye offset or cant. Keep the HUD subtree intact.
+            var transform = UnityType("Transform");
+            var move = Managed("MoveHeadAttachment", true, module.TypeSystem.Void, rig, module.TypeSystem.String);
+            move.Body.Variables.Add(new VariableDefinition(transform));
+            var il = move.Body.GetILProcessor();
+            var done = il.Create(OpCodes.Ret);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, Method(rig, "get_leftEyeAnchor"));
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Callvirt, Unity("Transform", "Find", transform, true, module.TypeSystem.String));
+            il.Emit(OpCodes.Stloc_0);
+            il.Emit(OpCodes.Ldloc_0);
+            il.Emit(OpCodes.Brfalse, done);
+            il.Emit(OpCodes.Ldloc_0);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, Method(rig, "get_centerEyeAnchor"));
+            il.Emit(OpCodes.Callvirt, Unity("Transform", "set_parent", module.TypeSystem.Void, true, transform));
+            il.Append(done);
+
+            var awake = Method(rig, "Awake");
+            var end = awake.Body.Instructions.Last();
+            il = awake.Body.GetILProcessor();
+            foreach (var child in new[] { "HUDFadePlane", "Spotlight", "ScanlinesOVRGuiObjectMain", "LeftEyeJunk" }) {
+                il.InsertBefore(end, il.Create(OpCodes.Ldarg_0));
+                il.InsertBefore(end, il.Create(OpCodes.Ldstr, child));
+                il.InsertBefore(end, il.Create(OpCodes.Call, move));
+            }
+        }
+
+        private void PatchGameplayHead()
+        {
+            var transform = UnityType("Transform");
+            var vector = UnityType("Vector3");
+            var ray = UnityType("Ray");
+            var getPosition = Unity("Transform", "get_position", vector, true);
+            var getForward = Unity("Transform", "get_forward", vector, true);
+            var player = module.GetType("Player");
+            var proximity = module.GetType("PlayerProximity");
+            var wind = module.GetType("Wind");
+
+            // Resolve the center on the same rig that owns the game's rendering camera.
+            // Each component caches it during its existing VR-only initialization.
+            var findHead = Managed("FindHeadAnchor", true, transform);
+            var il = findHead.Body.GetILProcessor();
+            il.Emit(OpCodes.Call, Method(module.GetType("OculusSteamVRSwitcher"), "GetVRCameraLeftGameObject"));
+            il.Emit(OpCodes.Callvirt, Unity("GameObject", "get_transform", transform, true));
+            il.Emit(OpCodes.Callvirt, Unity("Transform", "get_parent", transform, true));
+            var getComponent = Method(rig, "EnsureGameObjectIntegrity").Body.Instructions
+                .Select(i => i.Operand).OfType<GenericInstanceMethod>().First(m => m.Name == "GetComponent");
+            var getRig = new GenericInstanceMethod(getComponent.ElementMethod);
+            getRig.GenericArguments.Add(rig);
+            il.Emit(OpCodes.Callvirt, getRig);
+            il.Emit(OpCodes.Callvirt, Method(rig, "get_centerEyeAnchor"));
+            il.Emit(OpCodes.Ret);
+
+            var headRay = Managed("HeadRay", true, ray, transform);
+            il = headRay.Body.GetILProcessor();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Callvirt, getPosition);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Callvirt, getForward);
+            il.Emit(OpCodes.Newobj, Unity("Ray", ".ctor", module.TypeSystem.Void, true, vector, vector));
+            il.Emit(OpCodes.Ret);
+
+            foreach (var owner in new[] { player, proximity }) {
+                // These two private fields were used exclusively for head direction and aiming.
+                var head = Field(owner, "oculusCameraLeft");
+                head.Name = "aftxrHeadAnchor";
+                owner.Fields.Remove(Field(owner, "oculusCameraRight"));
+                var start = Method(owner, "Start");
+                var store = At(start, 0x15);
+                var read = At(start, 0x0b);
+                var resume = At(start, 0x2a);
+                il = start.Body.GetILProcessor();
+                read.OpCode = OpCodes.Call;
+                read.Operand = findHead;
+                il.Remove(read.Next);
+                while (store.Next != resume) il.Remove(store.Next);
+
+                // Keep the VR branch target and the original desktop ray and hit processing.
+                // Player.FixedUpdate already reads the renamed field for airborne steering.
+                bool graffiti = owner == player;
+                var aim = Method(owner, graffiti ? "TagGraffiti" : "CastMouseRay");
+                var first = At(aim, graffiti ? 0x41 : 0x0a);
+                resume = At(aim, graffiti ? 0x95 : 0x63);
+                il = aim.Body.GetILProcessor();
+                while (first.Next != resume) il.Remove(first.Next);
+                il.InsertBefore(resume, il.Create(OpCodes.Ldfld, head));
+                il.InsertBefore(resume, il.Create(OpCodes.Call, headRay));
+                il.InsertBefore(resume, il.Create(graffiti ? OpCodes.Stloc_1 : OpCodes.Stloc_0));
+            }
+
+            var windHead = new FieldDefinition("aftxrHeadAnchor", FieldAttributes.Private, transform);
+            wind.Fields.Add(windHead);
+            var setup = Method(wind, "SetupWindBlurOculus");
+            il = setup.Body.GetILProcessor();
+            var entry = setup.Body.Instructions[0];
+            il.InsertBefore(entry, il.Create(OpCodes.Ldarg_0));
+            il.InsertBefore(entry, il.Create(OpCodes.Call, findHead));
+            il.InsertBefore(entry, il.Create(OpCodes.Stfld, windHead));
+            // The original emitter search now starts at the center, which owns the jump HUD group.
+            var emitterRoot = At(setup, 0x01);
+            emitterRoot.OpCode = OpCodes.Ldarg_0;
+            emitterRoot.Operand = null;
+            var emitters = emitterRoot.Next;
+            il.InsertBefore(emitters, il.Create(OpCodes.Ldfld, windHead));
+            il.InsertBefore(emitters, il.Create(OpCodes.Callvirt, Unity("Component", "get_gameObject", UnityType("GameObject"), true)));
+            var windBlur = Method(wind, "HandleWindBlurOculus");
+            var source = At(windBlur, 0);
+            source.OpCode = OpCodes.Ldarg_0;
+            source.Operand = null;
+            source.Next.OpCode = OpCodes.Ldfld;
+            source.Next.Operand = windHead;
         }
     }
 }

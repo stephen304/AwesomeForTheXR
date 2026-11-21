@@ -82,7 +82,9 @@ void StereoSession::open(PFN_xrGetInstanceProcAddr getProc, XrInstance xr, XrSys
     XrReferenceSpaceCreateInfo ref{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     ref.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     ref.poseInReferenceSpace.orientation.w = 1;
-    requireXR("xrCreateReferenceSpace", CreateReferenceSpace(session, &ref, &space));
+    requireXR("xrCreateReferenceSpace(LOCAL)", CreateReferenceSpace(session, &ref, &localSpace));
+    ref.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    requireXR("xrCreateReferenceSpace(VIEW)", CreateReferenceSpace(session, &ref, &viewSpace));
     uint32_t count = 0;
     std::array<XrViewConfigurationView,2> config{{{XR_TYPE_VIEW_CONFIGURATION_VIEW},{XR_TYPE_VIEW_CONFIGURATION_VIEW}}};
     requireXR("xrEnumerateViewConfigurationViews", EnumerateViewConfigurationViews(instance, system, stereo, 2, &count, config.data()));
@@ -239,7 +241,7 @@ bool StereoSession::begin(int unityFrame) {
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
     locate.viewConfigurationType = stereo;
     locate.displayTime = displayTime;
-    locate.space = space;
+    locate.space = localSpace;
     XrViewState tracking{XR_TYPE_VIEW_STATE};
     uint32_t count = 0;
     std::array<XrView,2> next{{{XR_TYPE_VIEW},{XR_TYPE_VIEW}}};
@@ -248,20 +250,23 @@ bool StereoSession::begin(int unityFrame) {
     if (valid) {
         views = next;
         haveViews = true;
-        if (recenterPending) {
-            const auto& l = views[0].pose;
-            const auto& r = views[1].pose;
-            center = {(l.position.x+r.position.x)*.5f,(l.position.y+r.position.y)*.5f,(l.position.z+r.position.z)*.5f};
-            // Average the forward vectors so headsets with canted displays center straight ahead.
-            float x = 0, z = 0;
-            for (const auto& view : views) {
-                auto q = view.pose.orientation;
-                x += 2*(q.x*q.z + q.w*q.y);
-                z += 1-2*(q.x*q.x + q.y*q.y);
-            }
-            centerYaw = std::atan2(x,z);
-            recenterPending = false;
-        }
+    }
+
+    XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+    requireXR("xrLocateSpace(VIEW in LOCAL)", LocateSpace(viewSpace, localSpace, displayTime, &head));
+    constexpr auto validHead = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    // A runtime may infer either component. Keep its last usable value during tracking loss.
+    if (head.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) headPose.orientation = head.pose.orientation;
+    if (head.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) headPose.position = head.pose.position;
+    if (recenterPending && (head.locationFlags & validHead) == validHead) {
+        center = headPose.position;
+        const auto& q = headPose.orientation;
+        const float x = 2 * (q.x*q.z + q.w*q.y);
+        const float z = 1 - 2 * (q.x*q.x + q.y*q.y);
+        // The forward axis has no heading at a vertical gaze. Use the horizontal right axis there.
+        centerYaw = x*x + z*z > 1.e-6f ? std::atan2(x, z)
+            : std::atan2(2 * (q.w*q.y - q.x*q.z), 1 - 2 * (q.y*q.y + q.z*q.z));
+        recenterPending = false;
     }
     return true;
 }
@@ -274,10 +279,10 @@ void StereoSession::describe(int i, float* d) const {
         d[2] = (f.angleRight-f.angleLeft)*57.29578f; d[3] = (f.angleUp-f.angleDown)*57.29578f;
     }
 }
-void StereoSession::pose(int i, float* p) const {
+void StereoSession::pose(int anchor, float* p) const {
     std::fill_n(p, 7, 0.f); p[6] = 1;
-    if (!haveViews) return;
-    auto raw = views[i].pose;
+    if (anchor != headAnchor && !haveViews) return;
+    const auto& raw = anchor == headAnchor ? headPose : views[anchor].pose;
     float c = std::cos(centerYaw), s = std::sin(centerYaw);
     const float x = raw.position.x-center.x, z = raw.position.z-center.z;
     p[0] = c*x-s*z; p[1] = raw.position.y-center.y; p[2] = -(s*x+c*z);
@@ -312,7 +317,7 @@ void StereoSession::end(bool images) {
             out[i].pose = views[i].pose; out[i].fov = views[i].fov;
             out[i].subImage.swapchain = eyes[i].chain; out[i].subImage.imageRect.extent = eyes[i].size;
         }
-        layer.space = space; layer.viewCount = 2; layer.views = out.data();
+        layer.space = localSpace; layer.viewCount = 2; layer.views = out.data();
         info.layerCount = 1; info.layers = &header;
     }
     begun = false;
@@ -384,8 +389,9 @@ void StereoSession::close() noexcept {
         eye.chain = XR_NULL_HANDLE;
     }
     context.Reset();
-    if (space) DestroySpace(space);
-    space = XR_NULL_HANDLE;
+    if (viewSpace) DestroySpace(viewSpace);
+    if (localSpace) DestroySpace(localSpace);
+    viewSpace = localSpace = XR_NULL_HANDLE;
     XrResult result = DestroySession(session);
     if (log) fprintf(log, "xrDestroySession: %d; %u stereo projections in %u frames.\n",
                      static_cast<int>(result), submitted, frames);

@@ -10,7 +10,7 @@
 
 // Instance functions are resolved through the exact loader used for preflight.
 #define AFTXR_STEREO_FUNCTIONS(X) \
-    X(CreateSession) X(DestroySession) X(CreateReferenceSpace) X(DestroySpace) \
+    X(CreateSession) X(DestroySession) X(CreateReferenceSpace) X(DestroySpace) X(LocateSpace) \
     X(EnumerateViewConfigurationViews) X(EnumerateEnvironmentBlendModes) X(EnumerateSwapchainFormats) \
     X(CreateSwapchain) X(DestroySwapchain) X(EnumerateSwapchainImages) X(AcquireSwapchainImage) \
     X(WaitSwapchainImage) X(ReleaseSwapchainImage) X(PollEvent) X(BeginSession) X(EndSession) \
@@ -22,7 +22,9 @@ public:
               const XrGraphicsBindingD3D11KHR& binding, FILE* log);
     bool begin(int unityFrame);
     void describe(int eye, float* desc) const;
-    void pose(int eye, float* pose) const;
+    // OVREye.Center in the original game. Only pose queries accept this index.
+    static constexpr int headAnchor = -1;
+    void pose(int anchor, float* pose) const;
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
     void recenter() { recenterPending = true; }
     void renderedEye(unsigned eye, IUnknown* texture, int unityFrame);
@@ -45,7 +47,8 @@ private:
     FILE* log = nullptr;
     XrInstance instance = XR_NULL_HANDLE;
     XrSession session = XR_NULL_HANDLE;
-    XrSpace space = XR_NULL_HANDLE;
+    XrSpace localSpace = XR_NULL_HANDLE, viewSpace = XR_NULL_HANDLE;
+    XrPosef headPose{{0, 0, 0, 1}, {}};
     XrEnvironmentBlendMode blend{};
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     std::array<Eye, 2> eyes{};
