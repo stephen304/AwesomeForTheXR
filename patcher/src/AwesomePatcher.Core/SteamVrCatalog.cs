@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
@@ -38,10 +39,16 @@ namespace AwesomePatcher.Core
         }
 
         private readonly string pathRegistry;
+        private readonly Action<string, string, bool> updateManifest;
+
         internal SteamVrCatalog() : this(Environment.GetEnvironmentVariable("VR_PATHREG_OVERRIDE") ??
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "openvr", "openvrpaths.vrpath")) { }
 
-        internal SteamVrCatalog(string pathRegistry) { this.pathRegistry = pathRegistry; }
+        internal SteamVrCatalog(string pathRegistry, Action<string, string, bool> updateManifest = null)
+        {
+            this.pathRegistry = pathRegistry;
+            this.updateManifest = updateManifest ?? OpenVrManifest.SetRegistered;
+        }
 
         private static T Read<T>(string path) where T : class
         {
@@ -62,7 +69,9 @@ namespace AwesomePatcher.Core
                 Path.Combine(root, "bin", IntPtr.Size == 8 ? "win64" : "win32", "openvr_api.dll");
         }
 
-        public ArtworkRegistration Inspect(string manifest)
+        public ArtworkRegistration Inspect(string manifest) => Inspect(manifest, null);
+
+        private ArtworkRegistration Inspect(string manifest, HashSet<string> registeredPaths)
         {
             var paths = GetPaths();
             var config = Environment.GetEnvironmentVariable("VR_CONFIG_PATH") ?? paths?.config?.FirstOrDefault();
@@ -74,7 +83,10 @@ namespace AwesomePatcher.Core
             {
                 if (string.IsNullOrEmpty(path) || !Path.IsPathRooted(path)) continue;
                 if (string.Equals(Path.GetFullPath(path), manifest, StringComparison.OrdinalIgnoreCase))
+                {
                     result |= ArtworkRegistration.OwnedPath;
+                    registeredPaths?.Add(path);
+                }
                 else if (File.Exists(path))
                 {
                     // An unrelated malformed manifest cannot provide a usable application entry.
@@ -91,13 +103,18 @@ namespace AwesomePatcher.Core
 
         public void SetRegistered(string manifest, bool registered)
         {
-            var state = Inspect(manifest);
+            var registeredPaths = new HashSet<string>(StringComparer.Ordinal);
+            var state = Inspect(manifest, registeredPaths);
             if (state.HasFlag(ArtworkRegistration.OwnedPath) == registered) return;
             if (registered && state.HasFlag(ArtworkRegistration.OtherProvider)) return;
             var library = Library(GetPaths());
             if (!File.Exists(library))
                 throw new IOException("SteamVR is unavailable to change its artwork registration.");
-            OpenVrManifest.SetRegistered(library, manifest, registered);
+            if (registered)
+                updateManifest(library, manifest, true);
+            else
+                // SteamVR removes manifests by their exact registered spelling, including path casing.
+                foreach (var path in registeredPaths) updateManifest(library, path, false);
             if (Inspect(manifest).HasFlag(ArtworkRegistration.OwnedPath) != registered)
                 throw new IOException("SteamVR did not save the artwork registration.");
         }
