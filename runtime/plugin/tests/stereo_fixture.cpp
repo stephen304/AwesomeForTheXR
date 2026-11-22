@@ -39,7 +39,9 @@ Eye& eye(XrSwapchain handle) {
 
 namespace {
 const XrActionSet menuSet = (XrActionSet)14;
-const XrAction aim = (XrAction)15, selectButton = (XrAction)16;
+const XrActionSet gameSet = (XrActionSet)17;
+const XrAction aim = (XrAction)15, selectButton = (XrAction)16, move = (XrAction)18, turn = (XrAction)19;
+const XrAction deploy = (XrAction)20;
 const char* const users[] = {"/user/hand/left", "/user/hand/right"};
 const XrPath handPaths[] = {1, 2};
 std::map<std::string, XrPath> paths{{users[0], handPaths[0]}, {users[1], handPaths[1]}};
@@ -65,38 +67,60 @@ XRAPI_ATTR XrResult XRAPI_CALL xrStringToPath(XrInstance, const char* name, XrPa
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSet(XrInstance, const XrActionSetCreateInfo* info, XrActionSet* out) {
-    expect(!strcmp(info->actionSetName,"menus"));
-    *out = menuSet;
+    const bool menus = !strcmp(info->actionSetName,"menus");
+    expect(menus || !strcmp(info->actionSetName,"game"));
+    *out = menus ? menuSet : gameSet;
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroyActionSet(XrActionSet set) {
-    expect(set == menuSet);
+    expect(set == menuSet || set == gameSet);
     attached = false;
     suggested.clear();
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCreateInfo* info, XrAction* out) {
+    if (!strcmp(info->actionName, "deploy_parachute")) {
+        expect(set == gameSet && info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT && info->countSubactionPaths == 0);
+        *out = deploy;
+        return XR_SUCCESS;
+    }
+    if (set == gameSet) {
+        const bool movement = !strcmp(info->actionName, "move");
+        expect((movement || !strcmp(info->actionName, "turn")) && info->actionType == XR_ACTION_TYPE_VECTOR2F_INPUT &&
+               info->countSubactionPaths == 0);
+        *out = movement ? move : turn;
+        return XR_SUCCESS;
+    }
     expect(set == menuSet && info->countSubactionPaths == 2 && info->subactionPaths[0] == handPaths[0] &&
            info->subactionPaths[1] == handPaths[1]);
     const bool isAim = info->actionType == XR_ACTION_TYPE_POSE_INPUT;
-    expect((isAim || info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT) && !strcmp(info->actionName, isAim ? "aim" : "select"));
+    expect((isAim || info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT) && !strcmp(info->actionName, isAim ? "aim" : "pointer_select"));
     *out = isAim ? aim : selectButton;
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, const XrInteractionProfileSuggestedBinding* info) {
-    expect(!attached && info->countSuggestedBindings == 4 && suggested.insert(info->interactionProfile).second);
+    expect(!attached && suggested.insert(info->interactionProfile).second);
     for (const auto& profile : profiles) {
         if (info->interactionProfile != pathId("/interaction_profiles/" + profile.first)) continue;
         const auto* first = info->suggestedBindings;
         const auto* end = first + info->countSuggestedBindings;
-        for (const auto* user : users) {
-            const auto input = std::string(user) + "/input/";
-            auto has = [&](XrAction action, XrPath path) {
-                return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
-                    return b.action == action && b.binding == path;
-                });
-            };
+        const bool simple = profile.first == "khr/simple_controller";
+        const bool hasA = profile.first == "valve/index_controller" || profile.first == "oculus/touch_controller";
+        expect(info->countSuggestedBindings == (simple ? 4u : hasA ? 7u : 6u));
+        auto has = [&](XrAction action, XrPath path) {
+            return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
+                return b.action == action && b.binding == path;
+            });
+        };
+        const auto rightA = pathId("/user/hand/right/input/a/click");
+        expect(has(deploy, rightA) == hasA);
+        for (int i = 0; i < 2; ++i) {
+            const auto input = std::string(users[i]) + "/input/";
             expect(has(aim, pathId(input + "aim/pose")) && has(selectButton, pathId(input + profile.second)));
+            if (!simple) {
+                const char* stick = profile.first == "htc/vive_controller" ? "trackpad" : "thumbstick";
+                expect(has(i == 0 ? move : turn, pathId(input + stick)));
+            }
         }
         return XR_SUCCESS;
     }
@@ -104,7 +128,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrAttachSessionActionSets(XrSession s, const XrSessionActionSetsAttachInfo* info) {
-    expect(s == session && !attached && info->countActionSets == 1 && info->actionSets[0] == menuSet);
+    expect(s == session && !attached && info->countActionSets == 2 && info->actionSets[0] == menuSet && info->actionSets[1] == gameSet);
     expect(suggested.size() == profiles.size());
     attached = true;
     return XR_SUCCESS;
@@ -115,8 +139,14 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSpace(XrSession s, const XrActionSp
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInfo* info) {
-    expect(s == session && attached && frameOpen && sessionState == XR_SESSION_STATE_FOCUSED &&
-           info->countActiveActionSets == 1 && info->activeActionSets[0].actionSet == menuSet);
+    expect(s == session && attached && sessionState == XR_SESSION_STATE_FOCUSED &&
+           info->countActiveActionSets == 2 && info->activeActionSets[0].actionSet == menuSet &&
+           info->activeActionSets[1].actionSet == gameSet);
+    auto& fixture = currentFixture();
+    ++fixture.actionSyncs;
+    if (fixture.syncNotFocused) return XR_SESSION_NOT_FOCUSED;
+    fixture.deployChanged = fixture.syncedDeploy != fixture.deployHeld;
+    fixture.syncedDeploy = fixture.deployHeld;
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetCurrentInteractionProfile(XrSession s, XrPath user, XrInteractionProfileState* state) {
@@ -130,7 +160,23 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStatePose(XrSession, const XrActionSta
     state->isActive = currentFixture().handActive[handIndex(get->subactionPath)];
     return XR_SUCCESS;
 }
+XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateVector2f(XrSession s, const XrActionStateGetInfo* get, XrActionStateVector2f* state) {
+    expect(s == session && (get->action == move || get->action == turn) && get->subactionPath == XR_NULL_PATH &&
+           state->type == XR_TYPE_ACTION_STATE_VECTOR2F);
+    const int i = get->action == move ? 0 : 1;
+    state->isActive = currentFixture().stickActive[i];
+    state->currentState = currentFixture().sticks[i];
+    return XR_SUCCESS;
+}
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrActionStateGetInfo* get, XrActionStateBoolean* state) {
+    if (get->action == deploy) {
+        expect(get->subactionPath == XR_NULL_PATH && state->type == XR_TYPE_ACTION_STATE_BOOLEAN);
+        const auto& fixture = currentFixture();
+        state->isActive = fixture.deployActive;
+        state->currentState = state->isActive && fixture.syncedDeploy;
+        state->changedSinceLastSync = state->isActive && fixture.deployChanged;
+        return XR_SUCCESS;
+    }
     expect(get->action == selectButton);
     state->isActive = XR_TRUE;
     state->currentState = currentFixture().handPressed[handIndex(get->subactionPath)];
@@ -384,6 +430,7 @@ PFN_xrVoidFunction stereoFunction(const char* name) {
     MATCH(xrGetCurrentInteractionProfile)
     MATCH(xrGetActionStatePose)
     MATCH(xrGetActionStateBoolean)
+    MATCH(xrGetActionStateVector2f)
     MATCH(xrCreateSession)
     MATCH(xrDestroySession)
     MATCH(xrCreateReferenceSpace)

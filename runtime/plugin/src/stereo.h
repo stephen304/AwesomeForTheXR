@@ -15,7 +15,7 @@
     X(CreateSwapchain) X(DestroySwapchain) X(EnumerateSwapchainImages) X(AcquireSwapchainImage) \
     X(WaitSwapchainImage) X(ReleaseSwapchainImage) X(PollEvent) X(BeginSession) X(EndSession) \
     X(StringToPath) X(CreateActionSet) X(DestroyActionSet) X(CreateAction) X(SuggestInteractionProfileBindings) \
-    X(AttachSessionActionSets) X(GetCurrentInteractionProfile) X(CreateActionSpace) X(SyncActions) X(GetActionStateBoolean) X(GetActionStatePose) \
+    X(AttachSessionActionSets) X(GetCurrentInteractionProfile) X(CreateActionSpace) X(SyncActions) X(GetActionStateBoolean) X(GetActionStatePose) X(GetActionStateVector2f) \
     X(RequestExitSession) X(WaitFrame) X(BeginFrame) X(LocateViews) X(EndFrame)
 
 class StereoSession {
@@ -28,6 +28,8 @@ public:
     static constexpr int headAnchor = -1;
     void pose(int anchor, float* pose) const;
     int pointer(int hand, float* pose, uint32_t& generation) const;
+    bool deployParachutePressed(int unityFrame);
+    bool mergeSticks(int unityFrame, XrVector2f& movement, XrVector2f& look);
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
     void recenter() { recenterPending = true; }
     void renderedEye(unsigned eye, IUnknown* texture, int unityFrame);
@@ -51,8 +53,15 @@ private:
     XrInstance instance = XR_NULL_HANDLE;
     XrSession session = XR_NULL_HANDLE;
     XrSpace localSpace = XR_NULL_HANDLE, viewSpace = XR_NULL_HANDLE;
-    XrActionSet pointerSet = XR_NULL_HANDLE;
-    XrAction aim = XR_NULL_HANDLE, select = XR_NULL_HANDLE;
+    XrActionSet menuSet = XR_NULL_HANDLE, gameSet = XR_NULL_HANDLE;
+    XrAction move = XR_NULL_HANDLE, turn = XR_NULL_HANDLE;
+    XrVector2f movementStick{}, turnStick{};
+    int inputFrame = -1;
+    bool actionsActive = false;
+    XrAction aim = XR_NULL_HANDLE, pointerSelect = XR_NULL_HANDLE;
+    XrAction deploy = XR_NULL_HANDLE;
+    bool deployReleased = false, deployPressed = false;
+    void interruptDeploy();
     struct Hand {
         XrPath path{}, lastProfile{};
         uint32_t generation = 0;
@@ -68,7 +77,8 @@ private:
     };
     std::array<Hand, 2> hands{};
     bool profilesDirty = true;
-    void openPointer();
+    void openInput();
+    bool syncInput(int unityFrame);
     void samplePointer();
     bool readPointerHand(Hand& hand);
     void unityPose(const XrPosef& raw, float* p) const;

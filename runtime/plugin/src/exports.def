@@ -9,6 +9,8 @@ EXPORTS
     AFTXR_AbortVrLaunch
     AFTXR_BeginCameraFrame
     AFTXR_PointerHand
+    AFTXR_MergeGamepadSticks
+    AFTXR_GetDeployParachutePressed
     AFTXR_EyePose
     AFTXR_EyeProjection
     AFTXR_EyeDescription

@@ -391,6 +391,20 @@ extern "C" int __cdecl AFTXR_BeginCameraFrame(int frame) {
     } catch (const std::exception& e) { failStereo(e.what()); return -1; }
 }
 
+extern "C" int __cdecl AFTXR_MergeGamepadSticks(int frame, XrVector2f* movement, XrVector2f* look) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed || !movement || !look) return 0;
+    try { return launch.stereo->mergeSticks(frame, *movement, *look) ? 1 : 0; }
+    catch (const std::exception& e) { failStereo(e.what()); return 0; }
+}
+
+extern "C" int __cdecl AFTXR_GetDeployParachutePressed(int frame) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed) return 0;
+    try { return launch.stereo->deployParachutePressed(frame); }
+    catch (const std::exception& e) { failStereo(e.what()); return 0; }
+}
+
 extern "C" int __cdecl AFTXR_PointerHand(int hand, float* pose, uint32_t* generation) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (!generation) return 0;

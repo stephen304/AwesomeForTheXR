@@ -217,6 +217,78 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     frame(18);
     check(hand(1,tracked) == 1 && generation[1] == rightBeforeLoss + 1, "missed right-hand interruption");
     check(hand(0,tracked) == 3 && generation[0] == leftBeforeLoss, "right-hand loss interrupted the left drag");
+
+    auto merge = entry<int (__cdecl*)(int, XrVector2f*, XrVector2f*)>(plugin, "AFTXR_MergeGamepadSticks");
+    auto checkSticks = [&](int number, XrVector2f padMove, XrVector2f padTurn, XrVector2f wantMove, XrVector2f wantTurn, bool wantXrMove) {
+        check(merge(number, &padMove, &padTurn) == (wantXrMove ? 1 : 0), "wrong movement source");
+        check(padMove.x == wantMove.x && padMove.y == wantMove.y &&
+              padTurn.x == wantTurn.x && padTurn.y == wantTurn.y, "wrong GameInput stick contribution");
+    };
+    const auto syncs = state.actionSyncs;
+    state.handActive[0] = false;
+    state.sticks[0] = {.5f, -.5f};
+    state.sticks[1] = {-.4f, .3f};
+    // GameInput first, then rendering, then a second read. The stronger physical
+    // movement wins even though the XR diagonal is longer but below retail's gate.
+    checkSticks(19, {.55f, 0}, {}, {.55f, 0}, state.sticks[1], false);
+    frame(19);
+    checkSticks(19, {}, {.9f, 0}, state.sticks[0], {.9f, 0}, true);
+    check(state.actionSyncs == syncs + 1 && hand(0,tracked) == 0, "sticks resynced or required pointer tracking");
+
+    state.sticks[0] = {.75f, .25f};
+    state.stickActive[1] = false;
+    frame(20); // Rendering first. An inactive right action must preserve the physical pad.
+    checkSticks(20, {}, {.1f, -.2f}, state.sticks[0], {.1f, -.2f}, true);
+    checkSticks(20, {-.75f, 0}, {}, {-.75f, 0}, {}, false);
+    check(state.actionSyncs == syncs + 2, "render and GameInput observed different input frames");
+    state.syncNotFocused = true;
+    checkSticks(21, {}, {}, {}, {}, false);
+    frame(21);
+    state.syncNotFocused = false;
+    state.nextEvent = XR_SESSION_STATE_VISIBLE;
+    frame(22);
+    checkSticks(22, {.6f, 0}, {}, {.6f, 0}, {}, false);
+    state.nextEvent = XR_SESSION_STATE_FOCUSED;
+    state.stickActive[0] = false;
+    state.stickActive[1] = true;
+    frame(23);
+    checkSticks(23, {}, {}, {}, state.sticks[1], false);
+
+    state.stickActive[0] = true;
+    state.sticks[0] = {.25f, -.125f};
+    checkSticks(24, {-.5f, .4f}, {}, state.sticks[0], state.sticks[1], true);
+    checkSticks(24, {0, -.51f}, {}, {0, -.51f}, state.sticks[1], false);
+    state.sticks[0] = {};
+    checkSticks(25, {.49f, -.5f}, {}, {.49f, -.5f}, state.sticks[1], false);
+
+    auto deployPressed = entry<int (__cdecl*)(int)>(plugin, "AFTXR_GetDeployParachutePressed");
+    const auto beforeDeploy = state.actionSyncs;
+    state.deployHeld = true;
+    check(deployPressed(26) == 1 && deployPressed(26) == 1, "deploy press changed between reads");
+    frame(26);
+    check(deployPressed(27) == 0 && state.actionSyncs == beforeDeploy + 2, "held deploy or duplicate sync");
+    state.deployHeld = false;
+    check(deployPressed(28) == 0, "release produced a press");
+    state.deployActive = false;
+    state.deployHeld = true;
+    check(deployPressed(29) == 0, "inactive deploy");
+    state.deployActive = true;
+    check(deployPressed(30) == 0, "reconnected while held");
+    state.deployHeld = false;
+    check(deployPressed(31) == 0, "release after reconnect");
+    state.nextEvent = XR_SESSION_STATE_VISIBLE;
+    state.followingEvent = XR_SESSION_STATE_FOCUSED;
+    state.deployHeld = true;
+    frame(32);
+    check(deployPressed(32) == 0, "held across dashboard");
+    state.deployHeld = false;
+    check(deployPressed(33) == 0, "release after dashboard");
+    state.deployHeld = true;
+    check(deployPressed(35) == 0, "press leaked across an unsampled frame");
+    state.deployHeld = false;
+    check(deployPressed(36) == 0, "release after input gap");
+    state.deployHeld = true;
+    check(deployPressed(37) == 1, "fresh press after recovery");
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {

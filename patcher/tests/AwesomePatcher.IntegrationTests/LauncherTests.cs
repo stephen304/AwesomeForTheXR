@@ -142,6 +142,82 @@ namespace AwesomePatcher.IntegrationTests
             Console.WriteLine("PASS: executable install, mid-install rollback, repair, tamper detection and offline revert.");
         }
 
+        private static void CheckButtonBindings(ModuleDefinition module)
+        {
+            var input = module.GetType("GameInput");
+            var capture = input.Methods.Single(m => m.Name == "AFTXR_ReadParachutePress");
+            var pressed = input.Fields.Single(f => f.Name == "aftxrDeployPressed");
+            var legacy = input.Properties.Single(p => p.Name == "Parachute").GetMethod;
+            if (!capture.Body.Instructions.Any(i => i.Operand == legacy))
+                throw new InvalidOperationException("Deployment must still accept the original physical button press.");
+            foreach (var method in new[] { "GatherPCInput", "ResetInputs", "LateUpdate" })
+            {
+                var store = input.Methods.Single(m => m.Name == method).Body.Instructions.Single(i => i.Operand == pressed);
+                if (store.OpCode != OpCodes.Stfld || (method == "GatherPCInput" ? store.Previous.Operand != capture :
+                    store.Previous.OpCode != OpCodes.Ldc_I4_0))
+                    throw new InvalidOperationException("Incorrect button lifetime in GameInput." + method);
+            }
+            var getter = input.Properties.Single(p => p.Name == "DeployParachutePressed").GetMethod;
+            var deploy = module.GetType("Parachute").Methods.Single(m => m.Name == "Update");
+            var callers = module.GetTypes().SelectMany(t => t.Methods).Where(m => m.HasBody &&
+                m.Body.Instructions.Any(i => i.Operand == getter));
+            if (!callers.SequenceEqual(new[] { deploy }) || deploy.Body.Instructions.Any(i => i.Operand == legacy))
+                throw new InvalidOperationException("Only Parachute.Update should use the combined deployment input.");
+            var title = module.GetType("MainScreen").Methods.Single(m => m.Name == "Update");
+            if (title.Body.Instructions.Count(i => i.Operand == legacy) != 1)
+                throw new InvalidOperationException("The arcade title must use the original physical parachute shortcut.");
+            var code = capture.Body.Instructions;
+            if (!code.Any(i => i.Operand is MethodReference m && m.Name == "AFTXR_GetDeployParachutePressed") ||
+                !code.Any(i => i.Operand is MethodReference m && m.Name == "get_IsMidGame" && i.Next.OpCode == OpCodes.Ret))
+                throw new InvalidOperationException("XR deployment must require active gameplay.");
+            var resultsInputs = module.GetType("GameOverScreen").Methods.Single(m => m.Name == "Update").Body.Instructions
+                .Select(i => i.Operand).OfType<MethodReference>().Where(m => m.DeclaringType == input).Select(m => m.Name);
+            if (!resultsInputs.SequenceEqual(new[] { "get_Escape", "get_ClickDown", "get_Parachute", "get_ClickDown", "get_Espresso" }))
+                throw new InvalidOperationException("The results screen must use the original game input shortcuts.");
+        }
+
+        private static void CheckStickBindings(ModuleDefinition module)
+        {
+            var gather = module.GetType("GameInput").Methods.Single(m => m.Name == "GatherPCInput");
+            var code = gather.Body.Instructions;
+            var merge = code.Single(i => i.Operand is MethodReference m && m.Name == "AFTXR_MergeGamepadSticks");
+            var physicalAxes = code.Where(i => i.Operand is MethodReference m && m.Name.Contains("Stick") && m.Name.StartsWith("get_"))
+                .ToDictionary(i => ((MethodReference)i.Operand).Name, i =>
+                    (i.Previous.Previous.Operand, ((FieldReference)i.Next.Next.Operand).Name));
+            var move = merge.Previous.Previous.Operand;
+            var turn = merge.Previous.Operand;
+            string Axis(Instruction read) => physicalAxes.Single(p =>
+                p.Value.Item1 == read.Previous.Operand && p.Value.Item2 == ((FieldReference)read.Operand).Name).Key;
+            var uses = code.SkipWhile(i => i != merge).Where(i => i.OpCode == OpCodes.Ldfld &&
+                (i.Previous.Operand == move || i.Previous.Operand == turn) &&
+                ((FieldReference)i.Operand).DeclaringType.FullName == "UnityEngine.Vector2").Select(Axis);
+            if (physicalAxes["get_LeftStickX"].Item1 != move || physicalAxes["get_RightStickX"].Item1 != turn ||
+                !uses.SequenceEqual(new[] { "get_RightStickX", "get_RightStickY", "get_LeftStickX", "get_LeftStickX", "get_LeftStickY", "get_LeftStickY" }) ||
+                !code.Any(i => i.Operand is FieldReference f && f.Name == "isVRSupportEnabled" &&
+                    i.Next.OpCode == OpCodes.Brfalse && i.Next.Operand == merge.Next.Operand))
+                throw new InvalidOperationException("GameInput stick axes or desktop bypass are incorrectly wired.");
+
+            var levelCheck = merge.Next.Next;
+            var copy = levelCheck.Next.Next;
+            var analog = copy.Next.Operand;
+            if (((MethodReference)merge.Operand).ReturnType.MetadataType != MetadataType.Int32 ||
+                merge.Next.OpCode != OpCodes.Brfalse || !(levelCheck.Operand is MethodReference level) ||
+                level.FullName != "System.Boolean Utilities::get_IsGameLevel()" || levelCheck.Next.OpCode != OpCodes.Brfalse ||
+                levelCheck.Next.Operand != merge.Next.Operand || copy.OpCode != OpCodes.Ldloc || copy.Operand != move ||
+                copy.Next.OpCode != OpCodes.Stloc || copy.Next.Next.OpCode != OpCodes.Ldloca || copy.Next.Next.Operand != move ||
+                copy.Next.Next.Next.OpCode != OpCodes.Initobj || copy.Next.Next.Next.Next != merge.Next.Operand ||
+                !gather.Body.InitLocals)
+                throw new InvalidOperationException("Analog steering must bypass digital movement only for XR input in levels.");
+            foreach (var axis in new[] { ("horizontal", "x"), ("vertical", "y") })
+            {
+                var write = code.Last(i => i.OpCode == OpCodes.Stfld && ((FieldReference)i.Operand).Name == axis.Item1);
+                var component = write.Previous.Previous;
+                if (write.Previous.OpCode != OpCodes.Add || component.OpCode != OpCodes.Ldfld ||
+                    ((FieldReference)component.Operand).Name != axis.Item2 || component.Previous.Operand != analog)
+                    throw new InvalidOperationException("Analog steering must add the corresponding axis to keyboard movement.");
+            }
+        }
+
         private static void CheckHeadAnchors(ModuleDefinition module)
         {
             var display = module.GetType("OVRDisplay");
@@ -202,6 +278,8 @@ namespace AwesomePatcher.IntegrationTests
             using (var module = ModuleDefinition.ReadModule(path))
             {
                 CheckHeadAnchors(module);
+                CheckStickBindings(module);
+                CheckButtonBindings(module);
                 var display = module.GetType("OVRDisplay");
                 var manager = module.GetType("OVRManager");
                 var rig = module.GetType("OVRCameraRig");

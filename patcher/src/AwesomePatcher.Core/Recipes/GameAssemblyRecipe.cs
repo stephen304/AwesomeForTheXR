@@ -10,7 +10,7 @@ namespace AwesomePatcher.Core
     internal static class GameAssemblyRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "25518D7A06643692F0FAD43099DCD52AD5D6DDCA3F990BE57F4106961F22F000";
+        internal const string PatchedHash = "B18A7A03BB4F5506641608CBC4D8CAC0AA3662393C997C4FAE61B4B842F03C5E";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -132,6 +132,8 @@ namespace AwesomePatcher.Core
             enter.Emit(OpCodes.Ret);
             CameraRecipe.Apply(module, plugin, abortLaunch);
             MenuPointerRecipe.Apply(module, plugin);
+            StickInputRecipe.Apply(module, plugin);
+            ButtonInputRecipe.Apply(module, plugin);
 
             var il = awake.Body.GetILProcessor();
             var noGraphics = il.Create(OpCodes.Ldc_I4_0);

@@ -19,6 +19,11 @@ struct Fixture {
     static constexpr XrSpaceLocationFlags trackedHand = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT |
                                                        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     XrSpaceLocationFlags handFlags[2] = {trackedHand, trackedHand};
+    unsigned actionSyncs = 0;
+    bool syncNotFocused = false;
+    bool deployActive = true, deployHeld = false, syncedDeploy = false, deployChanged = false;
+    bool stickActive[2] = {true, true};
+    XrVector2f sticks[2] = {{.65f, -.8f}, {-.4f, .3f}};
     bool handPressed[2] = {true, false};
     bool handActive[2] = {true, true};
     XrViewStateFlags eyeFlags = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
