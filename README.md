@@ -35,7 +35,7 @@ The same executable accepts `verify`, `patch`, and `revert` in a terminal. Run `
 * Adapts the original Oculus eye camera rig with headset display orientation and sends frames to OpenXR.
 * Adds a better desktop view rendered from a new camera at the headset's center position.
 * Switches the game cursor from mouse to pointing and clicking with motion controls.
-* Maps controls like the sticks and parachute (default A) to Steam input.
+* Maps game controls to rebindable OpenXR actions in SteamVR.
 * Upgrades movement (left stick) input to analog, bypassing the 50% binary threshold applied to gamepad.
 * Fixes cover art in SteamVR's Now Playing panel when the game is launched through Steam.
 

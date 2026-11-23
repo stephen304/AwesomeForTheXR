@@ -1,4 +1,4 @@
-// Compile-time signatures for the fingerprinted player. Only MenuPointer is copied into the game.
+// Compile-time signatures for the fingerprinted player and injected input code.
 using System;
 namespace UnityEngine
 {
@@ -104,6 +104,16 @@ class Cursor : UnityEngine.Behaviour {
 class GUIController : UnityEngine.Behaviour {
     public static GUIController instance;
     public GameScreen currentScreen;
+    public extern bool InputEnabled { get; }
     public extern void InvalidateButtonHitOnDown();
 }
 class GameScreen : UnityEngine.Behaviour {}
+class LevelSelectScreen : GameScreen { public bool inputEnabled; }
+class SetupScreen : GameScreen { public bool inputEnabled; }
+class GraphicsScreen : GameScreen { public bool inputEnabled; }
+class ChoiceScreen : GameScreen { public bool inputEnabled; }
+class LoadingScreen : GameScreen {}
+class LoaderScene : UnityEngine.Behaviour { public bool loading, hasAnimationBegun; }
+class GameInput : UnityEngine.Behaviour { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
+class GameController : UnityEngine.Behaviour { public static GameController singleton; }
+static class Utilities { public static extern bool IsMidGame { get; } }

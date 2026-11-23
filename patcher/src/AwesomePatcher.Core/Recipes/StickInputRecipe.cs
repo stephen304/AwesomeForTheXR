@@ -6,7 +6,7 @@ namespace AwesomePatcher.Core
 {
     internal static class StickInputRecipe
     {
-        internal static void Apply(ModuleDefinition game, ModuleReference plugin)
+        internal static void Apply(ModuleDefinition game, ModuleReference plugin, MethodDefinition inputContext)
         {
             var input = game.GetType("GameInput");
             var gather = input.Methods.Single(m => m.Name == "GatherPCInput");
@@ -26,6 +26,7 @@ namespace AwesomePatcher.Core
                 ImplAttributes = MethodImplAttributes.PreserveSig,
                 PInvokeInfo = new PInvokeInfo(PInvokeAttributes.CallConvCdecl | PInvokeAttributes.NoMangle, entry, plugin)
             };
+            merge.Parameters.Add(new ParameterDefinition(game.TypeSystem.Int32));
             merge.Parameters.Add(new ParameterDefinition(game.TypeSystem.Int32));
             merge.Parameters.Add(new ParameterDefinition(new ByReferenceType(vector)));
             merge.Parameters.Add(new ParameterDefinition(new ByReferenceType(vector)));
@@ -67,14 +68,12 @@ namespace AwesomePatcher.Core
             il.InsertBefore(start, il.Create(OpCodes.Ldsfld, vrEnabled));
             il.InsertBefore(start, il.Create(OpCodes.Brfalse, start));
             il.InsertBefore(start, il.Create(OpCodes.Call, frame));
+            il.InsertBefore(start, il.Create(OpCodes.Call, inputContext));
             il.InsertBefore(start, il.Create(OpCodes.Ldloca, move));
             il.InsertBefore(start, il.Create(OpCodes.Ldloca, turn));
             il.InsertBefore(start, il.Create(OpCodes.Call, merge));
 
-            // Only XR steering in a level bypasses the game's per-axis digital thresholds.
-            var isGameLevel = game.GetType("Utilities").Methods.Single(m => m.Name == "get_IsGameLevel");
-            il.InsertBefore(start, il.Create(OpCodes.Brfalse, start));
-            il.InsertBefore(start, il.Create(OpCodes.Call, isGameLevel));
+            // The merge returns true only when XR supplies analog gameplay movement.
             il.InsertBefore(start, il.Create(OpCodes.Brfalse, start));
             il.InsertBefore(start, il.Create(OpCodes.Ldloc, move));
             il.InsertBefore(start, il.Create(OpCodes.Stloc, analogMove));

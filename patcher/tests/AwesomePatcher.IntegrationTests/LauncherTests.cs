@@ -167,9 +167,30 @@ namespace AwesomePatcher.IntegrationTests
             if (title.Body.Instructions.Count(i => i.Operand == legacy) != 1)
                 throw new InvalidOperationException("The arcade title must use the original physical parachute shortcut.");
             var code = capture.Body.Instructions;
-            if (!code.Any(i => i.Operand is MethodReference m && m.Name == "AFTXR_GetDeployParachutePressed") ||
-                !code.Any(i => i.Operand is MethodReference m && m.Name == "get_IsMidGame" && i.Next.OpCode == OpCodes.Ret))
-                throw new InvalidOperationException("XR deployment must require active gameplay.");
+            var xrPress = code.Single(i => i.Operand is MethodReference m && m.Name == "AFTXR_GetDeployParachutePressed");
+            if (xrPress.Next.OpCode != OpCodes.Ret)
+                throw new InvalidOperationException("The VR path must return the context-filtered deployment press directly.");
+            var gestureField = input.Fields.Single(f => f.Name == "aftxrGesturePresses");
+            var gather = input.Methods.Single(m => m.Name == "GatherPCInput").Body.Instructions;
+            var sample = gather.Single(i => i.Operand is MethodReference m && m.Name == "AFTXR_GetSpectatorGesturePresses");
+            var guard = sample.Previous.Previous.Previous.Previous;
+            if (sample.Next.Operand != gestureField || guard.OpCode != OpCodes.Brfalse || guard.Operand != sample.Next.Next ||
+                !(guard.Previous.Operand is FieldReference vr && vr.Name == "isVRSupportEnabled"))
+                throw new InvalidOperationException("XR spectator input must be collected only in VR.");
+            foreach (var method in new[] { "ResetInputs", "LateUpdate" })
+            {
+                var clear = input.Methods.Single(m => m.Name == method).Body.Instructions.Single(i => i.Operand == gestureField);
+                if (clear.OpCode != OpCodes.Stfld || clear.Previous.OpCode != OpCodes.Ldc_I4_0)
+                    throw new InvalidOperationException("XR spectator presses survived " + method);
+            }
+            foreach (var binding in new[] { ("ThumbsUp", 1), ("FlipOff", 2) })
+            {
+                var body = input.Properties.Single(p => p.Name == binding.Item1).GetMethod.Body.Instructions;
+                var mask = body.Single(i => i.Operand == gestureField).Next;
+                if (!Equals(mask.Operand, binding.Item2) || mask.Next.OpCode != OpCodes.And ||
+                    body[body.Count - 2].OpCode != OpCodes.Or)
+                    throw new InvalidOperationException("Incorrect spectator input merge for " + binding.Item1);
+            }
             var resultsInputs = module.GetType("GameOverScreen").Methods.Single(m => m.Name == "Update").Body.Instructions
                 .Select(i => i.Operand).OfType<MethodReference>().Where(m => m.DeclaringType == input).Select(m => m.Name);
             if (!resultsInputs.SequenceEqual(new[] { "get_Escape", "get_ClickDown", "get_Parachute", "get_ClickDown", "get_Espresso" }))
@@ -197,17 +218,14 @@ namespace AwesomePatcher.IntegrationTests
                     i.Next.OpCode == OpCodes.Brfalse && i.Next.Operand == merge.Next.Operand))
                 throw new InvalidOperationException("GameInput stick axes or desktop bypass are incorrectly wired.");
 
-            var levelCheck = merge.Next.Next;
-            var copy = levelCheck.Next.Next;
+            var copy = merge.Next.Next;
             var analog = copy.Next.Operand;
             if (((MethodReference)merge.Operand).ReturnType.MetadataType != MetadataType.Int32 ||
-                merge.Next.OpCode != OpCodes.Brfalse || !(levelCheck.Operand is MethodReference level) ||
-                level.FullName != "System.Boolean Utilities::get_IsGameLevel()" || levelCheck.Next.OpCode != OpCodes.Brfalse ||
-                levelCheck.Next.Operand != merge.Next.Operand || copy.OpCode != OpCodes.Ldloc || copy.Operand != move ||
+                merge.Next.OpCode != OpCodes.Brfalse || copy.OpCode != OpCodes.Ldloc || copy.Operand != move ||
                 copy.Next.OpCode != OpCodes.Stloc || copy.Next.Next.OpCode != OpCodes.Ldloca || copy.Next.Next.Operand != move ||
                 copy.Next.Next.Next.OpCode != OpCodes.Initobj || copy.Next.Next.Next.Next != merge.Next.Operand ||
                 !gather.Body.InitLocals)
-                throw new InvalidOperationException("Analog steering must bypass digital movement only for XR input in levels.");
+                throw new InvalidOperationException("The stick merge result must directly select the analog movement path.");
             foreach (var axis in new[] { ("horizontal", "x"), ("vertical", "y") })
             {
                 var write = code.Last(i => i.OpCode == OpCodes.Stfld && ((FieldReference)i.Operand).Name == axis.Item1);
@@ -277,6 +295,14 @@ namespace AwesomePatcher.IntegrationTests
         {
             using (var module = ModuleDefinition.ReadModule(path))
             {
+                var context = module.GetType("AFTXRInputContext").Methods.Single(m => m.Name == "Current");
+                var contextCalls = module.GetTypes().SelectMany(type => type.Methods).Where(m => m.HasBody)
+                    .SelectMany(m => m.Body.Instructions).Where(i => i.Operand == context)
+                    .Select(i => (i.Next.OpCode == OpCodes.Ldloca ? i.Next.Next.Next : i.Next).Operand as MethodReference)
+                    .Select(m => m?.Name).OrderBy(name => name);
+                if (!contextCalls.SequenceEqual(new[] { "AFTXR_BeginCameraFrame", "AFTXR_GetDeployParachutePressed",
+                    "AFTXR_GetSpectatorGesturePresses", "AFTXR_MergeGamepadSticks" }))
+                    throw new InvalidOperationException("Render and GameInput must use the same context for each native sample.");
                 CheckHeadAnchors(module);
                 CheckStickBindings(module);
                 CheckButtonBindings(module);

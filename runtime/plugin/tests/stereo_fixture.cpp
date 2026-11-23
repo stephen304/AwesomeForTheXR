@@ -39,9 +39,10 @@ Eye& eye(XrSwapchain handle) {
 
 namespace {
 const XrActionSet menuSet = (XrActionSet)14;
-const XrActionSet gameSet = (XrActionSet)17;
+const XrActionSet gameSet = (XrActionSet)17, levelsSet = (XrActionSet)26;
+const XrAction navigate = (XrAction)27, pointerHaptic = (XrAction)28;
 const XrAction aim = (XrAction)15, selectButton = (XrAction)16, move = (XrAction)18, turn = (XrAction)19;
-const XrAction deploy = (XrAction)20;
+const XrAction deploy = (XrAction)20, thumbsUp = (XrAction)21, flipOff = (XrAction)22, pressHaptic = (XrAction)25;
 const char* const users[] = {"/user/hand/left", "/user/hand/right"};
 const XrPath handPaths[] = {1, 2};
 std::map<std::string, XrPath> paths{{users[0], handPaths[0]}, {users[1], handPaths[1]}};
@@ -68,12 +69,13 @@ XRAPI_ATTR XrResult XRAPI_CALL xrStringToPath(XrInstance, const char* name, XrPa
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSet(XrInstance, const XrActionSetCreateInfo* info, XrActionSet* out) {
     const bool menus = !strcmp(info->actionSetName,"menus");
-    expect(menus || !strcmp(info->actionSetName,"game"));
-    *out = menus ? menuSet : gameSet;
+    const bool levels = !strcmp(info->actionSetName, "levels");
+    expect(menus || levels || !strcmp(info->actionSetName, "game"));
+    *out = menus ? menuSet : levels ? levelsSet : gameSet;
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrDestroyActionSet(XrActionSet set) {
-    expect(set == menuSet || set == gameSet);
+    expect(set == menuSet || set == levelsSet || set == gameSet);
     attached = false;
     suggested.clear();
     return XR_SUCCESS;
@@ -82,6 +84,24 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCre
     if (!strcmp(info->actionName, "deploy_parachute")) {
         expect(set == gameSet && info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT && info->countSubactionPaths == 0);
         *out = deploy;
+        return XR_SUCCESS;
+    }
+    if (!strcmp(info->actionName, "navigate")) {
+        expect(set == levelsSet && info->actionType == XR_ACTION_TYPE_VECTOR2F_INPUT && info->countSubactionPaths == 0);
+        *out = navigate;
+        return XR_SUCCESS;
+    }
+    const bool pointerFeedback = !strcmp(info->actionName, "pointer_haptic");
+    if (pointerFeedback || !strcmp(info->actionName, "gesture_haptic")) {
+        expect(set == (pointerFeedback ? menuSet : gameSet) && info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT && info->countSubactionPaths == 2 &&
+               info->subactionPaths[0] == handPaths[0] && info->subactionPaths[1] == handPaths[1]);
+        *out = pointerFeedback ? pointerHaptic : pressHaptic;
+        return XR_SUCCESS;
+    }
+    if (!strcmp(info->actionName, "thumbs_up") || !strcmp(info->actionName, "flip_off")) {
+        expect(set == gameSet && info->actionType == XR_ACTION_TYPE_BOOLEAN_INPUT && info->countSubactionPaths == 2 &&
+               info->subactionPaths[0] == handPaths[0] && info->subactionPaths[1] == handPaths[1]);
+        *out = !strcmp(info->actionName, "thumbs_up") ? thumbsUp : flipOff;
         return XR_SUCCESS;
     }
     if (set == gameSet) {
@@ -106,7 +126,9 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
         const auto* end = first + info->countSuggestedBindings;
         const bool simple = profile.first == "khr/simple_controller";
         const bool hasA = profile.first == "valve/index_controller" || profile.first == "oculus/touch_controller";
-        expect(info->countSuggestedBindings == (simple ? 4u : hasA ? 7u : 6u));
+        const bool index = profile.first == "valve/index_controller";
+        const bool touch = profile.first == "oculus/touch_controller";
+        expect(info->next == nullptr && info->countSuggestedBindings == (simple ? 8u : index ? 16u : touch ? 14u : 15u));
         auto has = [&](XrAction action, XrPath path) {
             return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
                 return b.action == action && b.binding == path;
@@ -116,10 +138,15 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
         expect(has(deploy, rightA) == hasA);
         for (int i = 0; i < 2; ++i) {
             const auto input = std::string(users[i]) + "/input/";
+            expect(has(pointerHaptic, pathId(std::string(users[i]) + "/output/haptic")));
+            expect(has(pressHaptic, pathId(std::string(users[i]) + "/output/haptic")));
             expect(has(aim, pathId(input + "aim/pose")) && has(selectButton, pathId(input + profile.second)));
             if (!simple) {
                 const char* stick = profile.first == "htc/vive_controller" ? "trackpad" : "thumbstick";
+                expect(has(navigate, pathId(input + stick)) == (i == 0));
                 expect(has(i == 0 ? move : turn, pathId(input + stick)));
+                expect(has(flipOff, pathId(input + (index ? "squeeze/force" : touch ? "squeeze/value" : "squeeze/click"))));
+                if (!touch) expect(has(thumbsUp, pathId(input + (index ? "trackpad/force" : "trackpad/click"))));
             }
         }
         return XR_SUCCESS;
@@ -128,7 +155,8 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrAttachSessionActionSets(XrSession s, const XrSessionActionSetsAttachInfo* info) {
-    expect(s == session && !attached && info->countActionSets == 2 && info->actionSets[0] == menuSet && info->actionSets[1] == gameSet);
+    expect(s == session && !attached && info->countActionSets == 3 && info->actionSets[0] == menuSet &&
+           info->actionSets[1] == levelsSet && info->actionSets[2] == gameSet);
     expect(suggested.size() == profiles.size());
     attached = true;
     return XR_SUCCESS;
@@ -139,14 +167,27 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateActionSpace(XrSession s, const XrActionSp
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInfo* info) {
-    expect(s == session && attached && sessionState == XR_SESSION_STATE_FOCUSED &&
-           info->countActiveActionSets == 2 && info->activeActionSets[0].actionSet == menuSet &&
-           info->activeActionSets[1].actionSet == gameSet);
+    expect(s == session && attached && sessionState == XR_SESSION_STATE_FOCUSED);
     auto& fixture = currentFixture();
+    const auto count = info->countActiveActionSets;
+    const auto* sets = info->activeActionSets;
+    fixture.menusActive = count >= 1 && sets[0].actionSet == menuSet;
+    fixture.gameActive = count == 1 && sets[0].actionSet == gameSet;
+    fixture.levelsActive = count == 2 && sets[1].actionSet == levelsSet;
+    expect(count == 0 || (count == 1 && (fixture.menusActive || fixture.gameActive)) ||
+           (fixture.menusActive && fixture.levelsActive));
+    for (unsigned i = 0; i < count; ++i) expect(sets[i].subactionPath == XR_NULL_PATH);
     ++fixture.actionSyncs;
     if (fixture.syncNotFocused) return XR_SESSION_NOT_FOCUSED;
     fixture.deployChanged = fixture.syncedDeploy != fixture.deployHeld;
     fixture.syncedDeploy = fixture.deployHeld;
+    for (auto* buttons : {fixture.pointerSelect, fixture.thumbsUp, fixture.flipOff}) {
+        for (int i = 0; i < 2; ++i) {
+            auto& button = buttons[i];
+            button.changed = button.held != button.synced;
+            button.synced = button.held;
+        }
+    }
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetCurrentInteractionProfile(XrSession s, XrPath user, XrInteractionProfileState* state) {
@@ -156,19 +197,28 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetCurrentInteractionProfile(XrSession s, XrPat
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStatePose(XrSession, const XrActionStateGetInfo* get, XrActionStatePose* state) {
-    expect(get->action == aim);
+    expect(currentFixture().menusActive && get->action == aim);
     state->isActive = currentFixture().handActive[handIndex(get->subactionPath)];
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateVector2f(XrSession s, const XrActionStateGetInfo* get, XrActionStateVector2f* state) {
-    expect(s == session && (get->action == move || get->action == turn) && get->subactionPath == XR_NULL_PATH &&
+    const bool gallery = get->action == navigate;
+    expect(s == session && (gallery ? currentFixture().levelsActive :
+           currentFixture().gameActive && (get->action == move || get->action == turn)) && get->subactionPath == XR_NULL_PATH &&
            state->type == XR_TYPE_ACTION_STATE_VECTOR2F);
-    const int i = get->action == move ? 0 : 1;
-    state->isActive = currentFixture().stickActive[i];
-    state->currentState = currentFixture().sticks[i];
+    const auto& fixture = currentFixture();
+    if (gallery) {
+        state->isActive = fixture.levelStickActive;
+        state->currentState = fixture.levelStick;
+    } else {
+        const int i = get->action == move ? 0 : 1;
+        state->isActive = fixture.stickActive[i];
+        state->currentState = fixture.sticks[i];
+    }
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrActionStateGetInfo* get, XrActionStateBoolean* state) {
+    expect(get->action == selectButton ? currentFixture().menusActive : currentFixture().gameActive);
     if (get->action == deploy) {
         expect(get->subactionPath == XR_NULL_PATH && state->type == XR_TYPE_ACTION_STATE_BOOLEAN);
         const auto& fixture = currentFixture();
@@ -177,10 +227,26 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrAction
         state->changedSinceLastSync = state->isActive && fixture.deployChanged;
         return XR_SUCCESS;
     }
-    expect(get->action == selectButton);
-    state->isActive = XR_TRUE;
-    state->currentState = currentFixture().handPressed[handIndex(get->subactionPath)];
+    expect(get->action == selectButton || get->action == thumbsUp || get->action == flipOff);
+    const auto& fixture = currentFixture();
+    const auto* buttons = get->action == selectButton ? fixture.pointerSelect :
+                          get->action == thumbsUp ? fixture.thumbsUp : fixture.flipOff;
+    const auto& button = buttons[handIndex(get->subactionPath)];
+    state->isActive = button.active;
+    state->currentState = button.active && button.synced;
+    state->changedSinceLastSync = button.active && button.changed;
     return XR_SUCCESS;
+}
+
+XRAPI_ATTR XrResult XRAPI_CALL xrApplyHapticFeedback(XrSession s, const XrHapticActionInfo* info, const XrHapticBaseHeader* feedback) {
+    expect(s == session && attached && sessionState == XR_SESSION_STATE_FOCUSED &&
+           info->type == XR_TYPE_HAPTIC_ACTION_INFO && ((currentFixture().gameActive && info->action == pressHaptic) ||
+           (currentFixture().menusActive && info->action == pointerHaptic)) && feedback->type == XR_TYPE_HAPTIC_VIBRATION);
+    const auto* tick = reinterpret_cast<const XrHapticVibration*>(feedback);
+    expect(tick->duration == 15'000'000 && tick->frequency == XR_FREQUENCY_UNSPECIFIED && tick->amplitude == 0.35f);
+    auto& fixture = currentFixture();
+    ++fixture.handTicks[handIndex(info->subactionPath)];
+    return fixture.hapticResult;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateSession(XrInstance instance, const XrSessionCreateInfo* info, XrSession* out) {
@@ -431,6 +497,7 @@ PFN_xrVoidFunction stereoFunction(const char* name) {
     MATCH(xrGetActionStatePose)
     MATCH(xrGetActionStateBoolean)
     MATCH(xrGetActionStateVector2f)
+    MATCH(xrApplyHapticFeedback)
     MATCH(xrCreateSession)
     MATCH(xrDestroySession)
     MATCH(xrCreateReferenceSpace)

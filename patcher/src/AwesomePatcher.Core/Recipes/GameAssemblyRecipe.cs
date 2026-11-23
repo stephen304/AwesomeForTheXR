@@ -10,7 +10,7 @@ namespace AwesomePatcher.Core
     internal static class GameAssemblyRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "B18A7A03BB4F5506641608CBC4D8CAC0AA3662393C997C4FAE61B4B842F03C5E";
+        internal const string PatchedHash = "84B9656094BBA93B8B17AC4FFF57A93A9DFC50DD50E25D9C5546BFE50DECC6E9";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -130,10 +130,15 @@ namespace AwesomePatcher.Core
             enter.Emit(OpCodes.Ldstr, "LoaderScene_oculus");
             enter.Emit(OpCodes.Call, load);
             enter.Emit(OpCodes.Ret);
-            CameraRecipe.Apply(module, plugin, abortLaunch);
-            MenuPointerRecipe.Apply(module, plugin);
-            StickInputRecipe.Apply(module, plugin);
-            ButtonInputRecipe.Apply(module, plugin);
+            using (var data = typeof(MenuPointerRecipe).Assembly.GetManifestResourceStream("MenuPointer.template.dll"))
+            using (var template = ModuleDefinition.ReadModule(data))
+            {
+                var inputContext = MenuPointerRecipe.AddInputContext(module, plugin, template);
+                CameraRecipe.Apply(module, plugin, abortLaunch, inputContext);
+                MenuPointerRecipe.Apply(module, plugin, template);
+                StickInputRecipe.Apply(module, plugin, inputContext);
+                ButtonInputRecipe.Apply(module, plugin, inputContext);
+            }
 
             var il = awake.Body.GetILProcessor();
             var noGraphics = il.Create(OpCodes.Ldc_I4_0);

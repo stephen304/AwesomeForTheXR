@@ -7,6 +7,7 @@
     <ProjectReference Include="../../src/AwesomePatcher.Core/AwesomePatcher.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../../src/AwesomePatcher.Core/PointerTemplate/InputContext.cs" Link="InputContext.cs" />
     <Compile Include="../../src/AwesomePatcher.Core/PointerTemplate/PointerButtons.cs" Link="PointerButtons.cs" />
     <Compile Include="../../src/AwesomePatcher.Core/PointerTemplate/PointerMouse.cs" Link="PointerMouse.cs" />
   </ItemGroup>

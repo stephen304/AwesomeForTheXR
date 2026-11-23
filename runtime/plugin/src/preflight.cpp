@@ -383,25 +383,32 @@ extern "C" int __cdecl AFTXR_IsOpenXRSceneReady() {
 
 // Called from Unity's main thread. The VR-only player option -force-gfx-direct
 // also executes the ordered end-of-frame render event on that thread.
-extern "C" int __cdecl AFTXR_BeginCameraFrame(int frame) {
+extern "C" int __cdecl AFTXR_BeginCameraFrame(int frame, InputContext context) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (launch.stereoFailed || !launch.stereo) return -1;
     try {
-        return launch.stereo->begin(frame) ? 1 : 0;
+        return launch.stereo->begin(frame, context) ? 1 : 0;
     } catch (const std::exception& e) { failStereo(e.what()); return -1; }
 }
 
-extern "C" int __cdecl AFTXR_MergeGamepadSticks(int frame, XrVector2f* movement, XrVector2f* look) {
+extern "C" int __cdecl AFTXR_MergeGamepadSticks(int frame, InputContext context, XrVector2f* movement, XrVector2f* look) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (!launch.stereo || launch.stereoFailed || !movement || !look) return 0;
-    try { return launch.stereo->mergeSticks(frame, *movement, *look) ? 1 : 0; }
+    try { return launch.stereo->mergeSticks(frame, context, *movement, *look) ? 1 : 0; }
     catch (const std::exception& e) { failStereo(e.what()); return 0; }
 }
 
-extern "C" int __cdecl AFTXR_GetDeployParachutePressed(int frame) {
+extern "C" int __cdecl AFTXR_GetSpectatorGesturePresses(int frame, InputContext context) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (!launch.stereo || launch.stereoFailed) return 0;
-    try { return launch.stereo->deployParachutePressed(frame); }
+    try { return launch.stereo->spectatorGesturePresses(frame, context); }
+    catch (const std::exception& e) { failStereo(e.what()); return 0; }
+}
+
+extern "C" int __cdecl AFTXR_GetDeployParachutePressed(int frame, InputContext context) {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed) return 0;
+    try { return launch.stereo->deployParachutePressed(frame, context); }
     catch (const std::exception& e) { failStereo(e.what()); return 0; }
 }
 

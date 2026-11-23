@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 #include "fixture.h"
+#include "../src/input_context.h"
 #include "../src/headset_retry.h"
 
 namespace {
@@ -89,7 +90,9 @@ void checkEyePixels(ID3D11Device* device, ID3D11Texture2D* output, const Pixels&
 }
 
 void testHeadGeometry(HMODULE plugin, Fixture& state) {
-    auto begin = entry<int (__cdecl*)(int)>(plugin, "AFTXR_BeginCameraFrame");
+    InputContext context = InputContext::Menus;
+    auto beginFrame = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_BeginCameraFrame");
+    auto begin = [&](int number) { return beginFrame(number, context); };
     auto pose = entry<void (__cdecl*)(int, float*)>(plugin, "AFTXR_EyePose");
     auto projection = entry<void (__cdecl*)(int, float, float, float*)>(plugin, "AFTXR_EyeProjection");
     auto description = entry<void (__cdecl*)(int, float*)>(plugin, "AFTXR_EyeDescription");
@@ -165,11 +168,11 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
 
     state.nextEvent = XR_SESSION_STATE_FOCUSED;
     state.handFlags[0] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-    state.handPressed[0] = false;
+    state.pointerSelect[0].held = false;
     frame(7);
     check(hand(0,tracked) == 0 && hand(1,tracked) == 1, "inferred release from previously tracked hand");
     state.handFlags[0] = Fixture::trackedHand;
-    state.handPressed[0] = true;
+    state.pointerSelect[0].held = true;
     state.handFlags[1] &= ~XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     frame(8);
     check(hand(0,tracked) == 3 && hand(1,tracked) == 0, "tracking recovery or stale rotation");
@@ -199,28 +202,29 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     before = generation[0];
     state.nextEvent = XR_SESSION_STATE_VISIBLE;
     state.followingEvent = XR_SESSION_STATE_FOCUSED;
-    state.handPressed[0] = false;
+    state.pointerSelect[0].held = false;
     frame(14);
     frame(15); // Unity had no pointer consumer in the frame that delivered both events.
     check(hand(0,tracked) == 1 && generation[0] != before, "dashboard interruption lost before Unity read it");
     check(hand(1,tracked) == 0 && generation[1] != other, "dashboard interruption missing on other hand");
 
     state.handFlags[1] = Fixture::trackedHand;
-    state.handPressed[0] = state.handPressed[1] = true;
+    state.pointerSelect[0].held = state.pointerSelect[1].held = true;
     frame(16);
     check(hand(0,tracked) == 3 && hand(1,tracked) == 3, "both hands held before tracking loss");
     const auto leftBeforeLoss = generation[0], rightBeforeLoss = generation[1];
     state.handFlags[1] &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-    state.handPressed[1] = false;
+    state.pointerSelect[1].held = false;
     frame(17); // Unity skips the pointer read on the only frame with lost tracking.
     state.handFlags[1] = Fixture::trackedHand;
     frame(18);
     check(hand(1,tracked) == 1 && generation[1] == rightBeforeLoss + 1, "missed right-hand interruption");
     check(hand(0,tracked) == 3 && generation[0] == leftBeforeLoss, "right-hand loss interrupted the left drag");
 
-    auto merge = entry<int (__cdecl*)(int, XrVector2f*, XrVector2f*)>(plugin, "AFTXR_MergeGamepadSticks");
+    context = InputContext::Gameplay;
+    auto merge = entry<int (__cdecl*)(int, InputContext, XrVector2f*, XrVector2f*)>(plugin, "AFTXR_MergeGamepadSticks");
     auto checkSticks = [&](int number, XrVector2f padMove, XrVector2f padTurn, XrVector2f wantMove, XrVector2f wantTurn, bool wantXrMove) {
-        check(merge(number, &padMove, &padTurn) == (wantXrMove ? 1 : 0), "wrong movement source");
+        check(merge(number, context, &padMove, &padTurn) == (wantXrMove ? 1 : 0), "wrong movement source");
         check(padMove.x == wantMove.x && padMove.y == wantMove.y &&
               padTurn.x == wantTurn.x && padTurn.y == wantTurn.y, "wrong GameInput stick contribution");
     };
@@ -261,7 +265,8 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.sticks[0] = {};
     checkSticks(25, {.49f, -.5f}, {}, {.49f, -.5f}, state.sticks[1], false);
 
-    auto deployPressed = entry<int (__cdecl*)(int)>(plugin, "AFTXR_GetDeployParachutePressed");
+    auto readDeployParachutePressed = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetDeployParachutePressed");
+    auto deployPressed = [&](int number) { return readDeployParachutePressed(number, context); };
     const auto beforeDeploy = state.actionSyncs;
     state.deployHeld = true;
     check(deployPressed(26) == 1 && deployPressed(26) == 1, "deploy press changed between reads");
@@ -289,10 +294,80 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(deployPressed(36) == 0, "release after input gap");
     state.deployHeld = true;
     check(deployPressed(37) == 1, "fresh press after recovery");
+
+    state.handTicks[0] = state.handTicks[1] = 0;
+    auto readSpectatorGesturePresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetSpectatorGesturePresses");
+    auto gestures = [&](int number) { return readSpectatorGesturePresses(number, context); };
+    state.thumbsUp[0].held = true;
+    check(gestures(38) == 1 && state.handTicks[0] == 1 && state.handTicks[1] == 0, "left pad feedback");
+    state.flipOff[1].held = true;
+    check(gestures(39) == 2 && state.handTicks[0] == 1 && state.handTicks[1] == 1, "right grip feedback while left pad held");
+    state.thumbsUp[1].held = state.flipOff[0].held = true;
+    check(gestures(40) == 3 && gestures(40) == 3, "opposite hands masked or consumed a fresh press");
+    check(gestures(41) == 0, "held gestures repeated");
+    state.thumbsUp[1].active = false;
+    state.thumbsUp[1].held = false;
+    check(gestures(42) == 0, "inactive pad");
+    state.thumbsUp[1].active = state.thumbsUp[1].held = true;
+    check(gestures(43) == 0, "reconnected pad fired while held");
+    check(state.handTicks[0] == 2 && state.handTicks[1] == 2, "duplicate feedback or wrong hand");
+    state.thumbsUp[0].held = state.flipOff[0].held = false;
+    check(gestures(44) == 0, "gesture release fired");
+    state.hapticResult = XR_ERROR_RUNTIME_FAILURE;
+    state.thumbsUp[0].held = state.flipOff[0].held = true;
+    check(gestures(45) == 3 && state.handTicks[0] == 3 && state.handTicks[1] == 2,
+          "simultaneous gestures on one hand need one tick and both inputs even if vibration fails");
+
+    context = InputContext::Menus;
+    state.hapticResult = XR_SUCCESS;
+    state.handActive[0] = true;
+    state.pointerSelect[0].held = state.pointerSelect[1].held = false;
+    state.flipOff[0].held = false;
+    state.deployHeld = false;
+    frame(46);
+    state.deployHeld = true;
+    state.pointerSelect[1].held = true;
+    check(deployPressed(47) == 0, "a fresh press in the menu must not request deployment");
+    check(gestures(47) == 0, "right trigger fired a gesture");
+    frame(47); // Input collection and rendering both see this press.
+    check(hand(1,tracked) == 3 && state.handTicks[0] == 3 && state.handTicks[1] == 3, "right trigger feedback");
+    state.pointerSelect[0].held = true;
+    frame(48); // The other hand can take the pointer while the right trigger is held.
+    check(hand(0,tracked) == 3 && gestures(48) == 0 && state.handTicks[0] == 4 && state.handTicks[1] == 3,
+          "left trigger feedback while right held");
+    state.pointerSelect[0].held = false;
+    frame(49);
+    state.flipOff[0].held = state.pointerSelect[0].held = true;
+    frame(50);
+    check(gestures(50) == 0 && state.handTicks[0] == 5 && state.handTicks[1] == 3, "menu trigger must tick without firing the grip action");
+    checkSticks(50, {}, {}, {}, {}, false);
+    context = InputContext::Levels;
+    state.levelStickActive = false;
+    frame(51);
+    check(state.levelsActive && state.menusActive, "gallery requires both navigation and pointer");
+    checkSticks(51, {.6f, 0}, {}, {.6f, 0}, {}, false);
+    state.levelStickActive = true;
+    state.stickActive[1] = false;
+    frame(52);
+    checkSticks(52, {}, {.2f, 0}, state.levelStick, {.2f, 0}, false);
+    const auto gallerySyncs = state.actionSyncs;
+    context = InputContext::Inactive;
+    checkSticks(52, {}, {}, {}, {}, false);
+    check(state.actionSyncs == gallerySyncs, "transition performed a second sync in one frame");
+    frame(53);
+    check(!state.levelsActive && !state.menusActive && !state.gameActive, "loading activated actions");
+    context = InputContext::Gameplay;
+    state.stickActive[1] = true;
+    frame(54);
+    check(state.gameActive && !state.menusActive && gestures(54) == 0 && deployPressed(54) == 0,
+          "held buttons leaked into gameplay");
+    checkSticks(54, {}, {}, {}, state.sticks[1], false);
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {
-    auto begin = entry<int (__cdecl*)(int)>(plugin, "AFTXR_BeginCameraFrame");
+    InputContext context = InputContext::Menus;
+    auto beginFrame = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_BeginCameraFrame");
+    auto begin = [&](int number) { return beginFrame(number, context); };
     auto submit = entry<void (__cdecl*)(int)>(plugin, "UnityRenderEvent");
     constexpr int endFrameEvent = 0x41585234;
     state.nextEvent = XR_SESSION_STATE_READY;

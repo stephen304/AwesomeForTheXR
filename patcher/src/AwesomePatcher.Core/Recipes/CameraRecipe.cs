@@ -15,11 +15,11 @@ namespace AwesomePatcher.Core
         private readonly MethodReference frameCount;
         private readonly MethodDefinition abort;
 
-        internal static void Apply(ModuleDefinition module, ModuleReference plugin, MethodDefinition abort)
+        internal static void Apply(ModuleDefinition module, ModuleReference plugin, MethodDefinition abort, MethodDefinition inputContext)
         {
             var recipe = new CameraRecipe(module, plugin, abort);
             recipe.PatchDisplay();
-            recipe.PatchManager();
+            recipe.PatchManager(inputContext);
             recipe.PatchRig();
             recipe.PatchDesktopMirror();
             recipe.MoveHeadAttachments();
@@ -145,7 +145,7 @@ namespace AwesomePatcher.Core
             il.Emit(OpCodes.Ret);
         }
 
-        private void PatchManager()
+        private void PatchManager(MethodDefinition inputContext)
         {
             var none = module.TypeSystem.Void;
             var flag = module.TypeSystem.Boolean;
@@ -185,7 +185,8 @@ namespace AwesomePatcher.Core
             var begin=Method(display,"BeginFrame");
             il=Rewrite(begin);
             il.Emit(OpCodes.Call,frameCount);
-            il.Emit(OpCodes.Call,Native("AFTXR_BeginCameraFrame",module.TypeSystem.Int32,module.TypeSystem.Int32));
+            il.Emit(OpCodes.Call,inputContext);
+            il.Emit(OpCodes.Call,Native("AFTXR_BeginCameraFrame",module.TypeSystem.Int32,module.TypeSystem.Int32,module.TypeSystem.Int32));
             var quit=il.Create(OpCodes.Call,Unity("Application","Quit",none,false));
             var done=il.Create(OpCodes.Ret);
             il.Emit(OpCodes.Dup);

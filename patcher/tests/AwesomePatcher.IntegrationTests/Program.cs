@@ -23,6 +23,7 @@ namespace AwesomePatcher.IntegrationTests
                     throw new ArgumentException("Optional arguments: <supported game folder> <built patch package folder>");
                 if (args.Length == 2) TestLaunchers(folder.FullName, args[0], args[1]);
                 TestMenuPointer();
+                TestInputContexts();
                 TestArtworkDiscovery(folder.FullName);
                 TestPatchCycle(folder.FullName);
                 TestNativePlugin(folder.FullName);

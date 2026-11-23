@@ -17,20 +17,27 @@ namespace AwesomePatcher.Core
         private readonly Dictionary<FieldDefinition, FieldDefinition> fields = new Dictionary<FieldDefinition, FieldDefinition>();
         private readonly IMetadataScope unity;
 
-        internal static void Apply(ModuleDefinition game, ModuleReference plugin)
+        internal static MethodDefinition AddInputContext(ModuleDefinition game, ModuleReference plugin, ModuleDefinition template)
         {
-            using (var data = typeof(MenuPointerRecipe).Assembly.GetManifestResourceStream("MenuPointer.template.dll"))
-            using (var template = ModuleDefinition.ReadModule(data))
-            {
-                var recipe = new MenuPointerRecipe(game, plugin, template.GetType("MenuPointer"));
-                var rig = game.GetType("OVRCameraRig");
-                var setPanel = new MethodDefinition("AFTXR_SetPointerPanel", MethodAttributes.Assembly | MethodAttributes.HideBySig, game.TypeSystem.Void);
-                setPanel.Parameters.Add(new ParameterDefinition(recipe.Bind(template.GetType("UnityEngine.MeshFilter"))));
-                rig.Methods.Add(setPanel);
-                recipe.CopyTemplate();
-                recipe.ConnectPanel(rig, setPanel);
-                recipe.ConnectGame();
-            }
+            var context = new MenuPointerRecipe(game, plugin, template.GetType("InputContext"));
+            context.CopyTemplate();
+            var splashAwake = context.Retail("LoaderScene", "Awake");
+            Prefix(splashAwake, Instruction.Create(OpCodes.Ldsfld, game.GetType("Options").Fields.Single(f => f.Name == "isVRSupportEnabled")),
+                Instruction.Create(OpCodes.Brfalse, splashAwake.Body.Instructions[0]), Instruction.Create(OpCodes.Ldarg_0),
+                Instruction.Create(OpCodes.Stsfld, context.pointer.Fields.Single(f => f.Name == "splash")));
+            return context.Method("Current");
+        }
+
+        internal static void Apply(ModuleDefinition game, ModuleReference plugin, ModuleDefinition template)
+        {
+            var recipe = new MenuPointerRecipe(game, plugin, template.GetType("MenuPointer"));
+            var rig = game.GetType("OVRCameraRig");
+            var setPanel = new MethodDefinition("AFTXR_SetPointerPanel", MethodAttributes.Assembly | MethodAttributes.HideBySig, game.TypeSystem.Void);
+            setPanel.Parameters.Add(new ParameterDefinition(recipe.Bind(template.GetType("UnityEngine.MeshFilter"))));
+            rig.Methods.Add(setPanel);
+            recipe.CopyTemplate();
+            recipe.ConnectPanel(rig, setPanel);
+            recipe.ConnectGame();
         }
 
         private MenuPointerRecipe(ModuleDefinition game, ModuleReference plugin, TypeDefinition source)
@@ -39,7 +46,7 @@ namespace AwesomePatcher.Core
             this.plugin = plugin;
             this.source = source;
             unity = game.AssemblyReferences.Single(r => r.Name == "UnityEngine");
-            pointer = new TypeDefinition("", "AFTXRMenuPointer", source.Attributes, game.TypeSystem.Object);
+            pointer = new TypeDefinition("", "AFTXR" + source.Name, source.Attributes, game.TypeSystem.Object);
             game.Types.Add(pointer);
         }
 
@@ -95,6 +102,7 @@ namespace AwesomePatcher.Core
             foreach (var f in source.Fields)
             {
                 var copy = new FieldDefinition(f.Name,f.Attributes,Bind(f.FieldType));
+                if (f.HasConstant) copy.Constant = f.Constant;
                 fields.Add(f,copy);
                 pointer.Fields.Add(copy);
             }
