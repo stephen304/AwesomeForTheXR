@@ -23,6 +23,7 @@ namespace AwesomePatcher.Core
             recipe.PatchRig();
             recipe.PatchDesktopMirror();
             recipe.MoveHeadAttachments();
+            recipe.DeferPausePanel();
             recipe.PatchGameplayHead();
         }
 
@@ -321,6 +322,63 @@ namespace AwesomePatcher.Core
                 il.Emit(OpCodes.Call, applyPose);
             }
             il.Emit(OpCodes.Ret);
+        }
+
+        private void DeferPausePanel()
+        {
+            var controller = module.GetType("GameController");
+            var panel = module.GetType("VRParentOnDemand");
+            var pending = new FieldDefinition("aftxrPendingPausePanel", FieldAttributes.Assembly, panel);
+            controller.Fields.Add(pending);
+            var singleton = Field(controller, "singleton");
+            var unchild = Method(panel, "UnChild");
+
+            // The pause event runs in Update. PlayerCamera positions the rig at the spawn in LateUpdate.
+            var pause = Method(panel, "PauseGameHandler");
+            var detach = pause.Body.Instructions.Single(i => i.Operand == unchild);
+            var queue = pause.Body.GetILProcessor();
+            queue.Replace(detach.Previous.Previous, queue.Create(OpCodes.Ldsfld, singleton));
+            queue.Replace(detach.Previous, queue.Create(OpCodes.Ldarg_0));
+            queue.Replace(detach, queue.Create(OpCodes.Stfld, pending));
+
+            // A new pause can queue again. Resume, results and either exit from the pause screen cancel it.
+            foreach (var name in new[] { "TogglePauseGame", "EndGame", "RestartLevel", "BackToMenu" })
+            {
+                var method = Method(controller, name);
+                var il = method.Body.GetILProcessor();
+                var first = method.Body.Instructions[0];
+                il.InsertBefore(first, il.Create(OpCodes.Ldarg_0));
+                il.InsertBefore(first, il.Create(OpCodes.Ldnull));
+                il.InsertBefore(first, il.Create(OpCodes.Stfld, pending));
+            }
+
+            var finish = new MethodDefinition("AFTXR_FinishPausePanel", MethodAttributes.Assembly |
+                MethodAttributes.Static | MethodAttributes.HideBySig, module.TypeSystem.Void);
+            panel.Methods.Add(finish);
+            finish.Body.Variables.Add(new VariableDefinition(panel));
+            var end = finish.Body.GetILProcessor();
+            var done = end.Create(OpCodes.Ret);
+            end.Emit(OpCodes.Ldsfld, singleton);
+            end.Emit(OpCodes.Brfalse, done);
+            end.Emit(OpCodes.Ldsfld, singleton);
+            end.Emit(OpCodes.Ldfld, pending);
+            end.Emit(OpCodes.Stloc_0);
+            end.Emit(OpCodes.Ldloc_0);
+            end.Emit(OpCodes.Brfalse, done);
+            end.Emit(OpCodes.Ldsfld, singleton);
+            end.Emit(OpCodes.Ldnull);
+            end.Emit(OpCodes.Stfld, pending);
+            end.Emit(OpCodes.Ldloc_0);
+            end.Emit(OpCodes.Call, Unity("Object", "op_Implicit", module.TypeSystem.Boolean, false, UnityType("Object")));
+            end.Emit(OpCodes.Brfalse, done);
+            end.Emit(OpCodes.Ldloc_0);
+            end.Emit(OpCodes.Ldc_I4_0);
+            end.Emit(OpCodes.Call, unchild);
+            end.Append(done);
+
+            // OVRManager already calls EndFrame after yielding WaitForEndOfFrame, even with game time paused.
+            var endFrame = Method(display, "EndFrame");
+            endFrame.Body.GetILProcessor().InsertBefore(endFrame.Body.Instructions[0], Instruction.Create(OpCodes.Call, finish));
         }
 
         private void MoveHeadAttachments()

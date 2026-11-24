@@ -10,7 +10,7 @@ namespace AwesomePatcher.Core
     internal static class GameAssemblyRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "B249534920C37768201BA862FB3CCBB219F194DD22B21EF199E380ED700D61A1";
+        internal const string PatchedHash = "365359BBC4C6ECAE6920BE751B08DA2464C9B866C70B5711F5A6484480408256";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 
@@ -55,6 +55,7 @@ namespace AwesomePatcher.Core
                 loader.Fields.Add(status);
                 ReplaceOculusSelection(awake, modeRead, vrEnabled, status, log);
                 AddMenuBadge(menu, status, rectCtor, box);
+                UseRealTimeForLevelEntry(module);
 
                 // Pin the PE timestamp so the same source produces the release digest on every install.
                 module.Write(output, new WriterParameters { Timestamp = 0 });
@@ -68,6 +69,33 @@ namespace AwesomePatcher.Core
             if (method == null || method.FullName != signature)
                 throw new InvalidDataException("Unexpected Unity method reference: " + signature);
             return method;
+        }
+
+        private static void UseRealTimeForLevelEntry(ModuleDefinition module)
+        {
+            // The player can pause or enter slow motion before these input locks expire.
+            var input = module.GetType("GameInput");
+            var entry = input.NestedTypes.Single(t => t.Name.StartsWith("<DisableInputAtStartOfLevel>"));
+            var body = entry.Methods.Single(m => m.Name == "MoveNext").Body;
+            var wait = body.Instructions.Single(i => i.OpCode == OpCodes.Newobj &&
+                ((MethodReference)i.Operand).DeclaringType.FullName == "UnityEngine.WaitForSeconds");
+            var owner = entry.Fields.Single(f => f.Name == "<>f__this");
+            var waitForRealtime = module.GetType("Utilities").Methods.Single(m => m.Name == "WaitForRealtime");
+            var startCoroutine = ExistingMethod(module, 0x0A000021,
+                "UnityEngine.Coroutine UnityEngine.MonoBehaviour::StartCoroutine(System.Collections.IEnumerator)");
+            var il = body.GetILProcessor();
+            var duration = wait.Previous;
+            il.InsertBefore(duration, il.Create(OpCodes.Ldarg_0));
+            il.InsertBefore(duration, il.Create(OpCodes.Ldfld, owner));
+            wait.OpCode = OpCodes.Call;
+            wait.Operand = waitForRealtime;
+            il.InsertAfter(wait, il.Create(OpCodes.Call, startCoroutine));
+
+            var disregard = input.NestedTypes.Single(t => t.Name.StartsWith("<DisregardInput>"));
+            var clock = ExistingMethod(module, 0x0A00006F, "System.Single UnityEngine.Time::get_realtimeSinceStartup()");
+            foreach (var instruction in disregard.Methods.Single(m => m.Name == "MoveNext").Body.Instructions)
+                if (instruction.Operand is MethodReference method && method.FullName == "System.Single UnityEngine.Time::get_time()")
+                    instruction.Operand = clock;
         }
 
         private static void ReplaceOculusSelection(MethodDefinition awake, Instruction modeRead,

@@ -290,6 +290,83 @@ namespace AwesomePatcher.IntegrationTests
             }
         }
 
+        private static void CheckPausePanel(ModuleDefinition module)
+        {
+            var panel = module.GetType("VRParentOnDemand");
+            var game = module.GetType("GameController");
+            var pending = game.Fields.Single(f => f.Name == "aftxrPendingPausePanel");
+            var detach = panel.Methods.Single(m => m.Name == "UnChild");
+            var pause = panel.Methods.Single(m => m.Name == "PauseGameHandler").Body.Instructions;
+            var finish = panel.Methods.Single(m => m.Name == "AFTXR_FinishPausePanel");
+            var pin = finish.Body.Instructions.Single(i => i.Operand == detach);
+            var results = panel.Methods.Single(m => m.Name == "EndGameHandler").Body.Instructions;
+            var singleton = game.Fields.Single(f => f.Name == "singleton");
+            var rechild = panel.Methods.Single(m => m.Name == "ReChild");
+            var resume = pause.Single(i => i.Operand == rechild);
+            var queue = pause.Single(i => i.OpCode == OpCodes.Stfld && i.Operand == pending);
+            var branch = pause[1];
+            if (pause[0].OpCode != OpCodes.Ldarg_1 || branch.OpCode != OpCodes.Brfalse || branch.Operand != resume.Previous ||
+                resume.Previous.OpCode != OpCodes.Ldarg_0 || resume.Next.OpCode != OpCodes.Ret ||
+                branch.Next.OpCode != OpCodes.Ldsfld || branch.Next.Operand != singleton ||
+                branch.Next.Next.OpCode != OpCodes.Ldarg_0 || branch.Next.Next.Next != queue ||
+                queue.Next.OpCode != OpCodes.Br || queue.Next.Operand != resume.Next)
+                throw new InvalidOperationException("Pause must queue this panel and return; resume must go directly to ReChild.");
+
+            var read = finish.Body.Instructions.Single(i => i.OpCode == OpCodes.Ldfld && i.Operand == pending);
+            var empty = read.Next.Next.Next;
+            var clear = finish.Body.Instructions.SingleOrDefault(i => i.OpCode == OpCodes.Stfld && i.Operand == pending);
+            if (read.Previous.Operand != singleton || read.Next.OpCode != OpCodes.Stloc_0 || read.Next.Next.OpCode != OpCodes.Ldloc_0 ||
+                empty.OpCode != OpCodes.Brfalse || empty.Operand != pin.Next || pin.Next.OpCode != OpCodes.Ret ||
+                empty.Next.OpCode != OpCodes.Ldsfld || empty.Next.Operand != singleton || empty.Next.Next.OpCode != OpCodes.Ldnull ||
+                clear == null || empty.Next.Next.Next != clear || clear.Offset >= pin.Offset)
+                throw new InvalidOperationException("EndFrame must clear the pending panel before detaching and return on an empty queue.");
+
+            if (pending.IsStatic || pause.Any(i => i.Operand == detach) ||
+                !module.GetType("OVRDisplay").Methods.Single(m => m.Name == "EndFrame").Body.Instructions.Any(i => i.Operand == finish) ||
+                pin.Previous.OpCode != OpCodes.Ldc_I4_0 || results.Single(i => i.Operand == detach).Previous.OpCode != OpCodes.Ldc_I4_1)
+                throw new InvalidOperationException("Only the VR pause detach should move to the end of the frame.");
+
+            foreach (var name in new[] { "TogglePauseGame", "EndGame", "RestartLevel", "BackToMenu" })
+            {
+                var entry = game.Methods.Single(m => m.Name == name).Body.Instructions;
+                if (entry[0].OpCode != OpCodes.Ldarg_0 || entry[1].OpCode != OpCodes.Ldnull ||
+                    entry[2].OpCode != OpCodes.Stfld || entry[2].Operand != pending)
+                    throw new InvalidOperationException(name + " must cancel the pending pause panel on this level.");
+            }
+        }
+
+        private static void CheckLevelEntryTiming(ModuleDefinition module)
+        {
+            var entry = module.GetType("GameInput/<DisableInputAtStartOfLevel>c__IteratorF");
+            var yields = entry.Methods.Single(m => m.Name == "MoveNext").Body.Instructions
+                .Where(i => i.OpCode == OpCodes.Stfld && ((FieldReference)i.Operand).Name == "$current").ToArray();
+            if (yields.Length != 3 || yields[0].Previous.OpCode != OpCodes.Ldnull ||
+                yields[2].Previous.OpCode != OpCodes.Ldnull)
+                throw new InvalidOperationException("Level entry must yield a frame before and after the timed wait.");
+
+            var start = yields[1].Previous;
+            var wait = start.Previous;
+            var duration = wait.Previous;
+            if (start.OpCode != OpCodes.Call || (start.Operand as MethodReference)?.FullName !=
+                    "UnityEngine.Coroutine UnityEngine.MonoBehaviour::StartCoroutine(System.Collections.IEnumerator)" ||
+                wait.OpCode != OpCodes.Call || (wait.Operand as MethodReference)?.FullName !=
+                    "System.Collections.IEnumerator Utilities::WaitForRealtime(System.Single)" ||
+                duration.OpCode != OpCodes.Ldc_R4 || !Equals(duration.Operand, 0.1f))
+                throw new InvalidOperationException("Level entry must yield the 0.1-second real-time coroutine.");
+
+            // One iterator reference receives $current. The other supplies the GameInput that starts the wait.
+            var owner = duration.Previous;
+            if (owner.OpCode != OpCodes.Ldfld || owner.Operand != entry.Fields.Single(f => f.Name == "<>f__this") ||
+                owner.Previous.OpCode != OpCodes.Ldarg_0 || owner.Previous.Previous.OpCode != OpCodes.Ldarg_0)
+                throw new InvalidOperationException("The level-entry coroutine must start on the iterator's GameInput instance.");
+
+            var disregard = module.GetType("GameInput/<DisregardInput>c__Iterator10");
+            var clocks = disregard.Methods.Single(m => m.Name == "MoveNext").Body.Instructions
+                .Select(i => i.Operand).OfType<MethodReference>().Where(m => m.DeclaringType.FullName == "UnityEngine.Time");
+            if (!clocks.Select(m => m.Name).SequenceEqual(new[] { "get_realtimeSinceStartup", "get_realtimeSinceStartup" }))
+                throw new InvalidOperationException("DisregardInput must start and finish on the same real-time clock.");
+        }
+
         private static void CheckSceneGuards(string path)
         {
             using (var module = ModuleDefinition.ReadModule(path))
@@ -304,6 +381,8 @@ namespace AwesomePatcher.IntegrationTests
                     .Select(m => m?.Name).OrderBy(name => name);
                 if (!contextCalls.SequenceEqual(new[] { "AFTXR_BeginCameraFrame", "AFTXR_GetButtonPresses", "AFTXR_MergeGamepadSticks" }))
                     throw new InvalidOperationException("Render and GameInput must use the same context for each native sample.");
+                CheckLevelEntryTiming(module);
+                CheckPausePanel(module);
                 CheckHeadAnchors(module);
                 CheckStickBindings(module);
                 CheckButtonBindings(module);
