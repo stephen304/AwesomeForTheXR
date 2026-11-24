@@ -39,13 +39,36 @@ The same executable accepts `verify`, `patch`, and `revert` in a terminal. Run `
 * Upgrades movement (left stick) input to analog, bypassing the 50% binary threshold applied to gamepad.
 * Fixes cover art in SteamVR's Now Playing panel when the game is launched through Steam.
 
+## Default Controls
+
+| Action | Valve Index | Oculus Touch
+|---|---|---|
+| Menu Navigation | Either trigger | Either trigger |
+| Level Select | Left stick, trigger click, or click and drag | Left stick, trigger click, or click and drag
+| Move | Left stick | Left stick |
+| Turn left or right | Right stick | Right stick |
+| Escape (Pause/Resume/Exit) | Right B |  B |
+| Deploy Parachute | Right A | A |
+| Thumbs Up | Press either trackpad | *— |
+| Flip Off | Squeeze either grip | Squeeze either grip |
+| Spray Graffiti | Either trigger | Either trigger |
+| Use Espresso | Left A | X |
+
+`* Missing actions should be re-bindable in SteamVR controller bindings - I wasn't sure what to set the default to here`
+
 ## Approach
 
-The patcher modifies the game runner to load an OpenXR plugin that submits the existing Oculus camera rig's frames to SteamVR. The dedicated Oculus launcher executable is patched to strip out all Oculus functionality and simply launch `Awesome.exe -vr`, which handles setting up SteamVR when `-vr` is present. All VR launch options behave the same and use OpenXR and D3D11. Only (show gfx options) requests the graphics dialog.
+The patcher modifies the game runner to load an OpenXR plugin that submits the existing Oculus camera rig's frames to SteamVR. The dedicated Oculus launcher executable is patched to strip out all Oculus functionality and simply launch `Awesome.exe -vr`, which handles setting up SteamVR when `-vr` is present. All VR launch options behave the same and use OpenXR and D3D11. Only (show gfx options) requests the graphics dialog. Many other parts of the game are also patched to add in modern Steam Input controls bindings, motion control pointer support, and analog movement. Where possible, I aimed to preserve original game behavior - especially the normal desktop (non-vr) mode, and only added enhancements to added behavior (better desktop mirror cam, analog vr movement, vr controller pointer ray).
 
 ## Troubleshooting
 
-* If the game erors with 'The 32-bit OpenXR runtime is unavailable', make sure you're using SteamVR 2.17 or later and select `Set SteamVR as OpenXR Runtime` under SteamVR Settings > OpenXR.
+* If the game errors with 'The 32-bit OpenXR runtime is unavailable', make sure you're using SteamVR 2.17 or later and select `Set SteamVR as OpenXR Runtime` under SteamVR Settings > OpenXR.
+
+## Known Issues
+* The menu UI and in-jump tilt has its own recentering behavior which can be annoying, there is no recenter binding yet. Keeping your head straight during menu transitions and loading boundaries helps.
+* The desktop mirror cam occasionally glitches out and shows a small pixelated view. I'm not sure how to reliably reproduce this so I'll take any hints.
+* Switching between the game window and other windows can be a little glitchy and having the desktop window focused can interfere with using the mouse.
+* The desktop window size affects the size of the menu render area. Leave it full sized for best results.
 
 ## License
 
