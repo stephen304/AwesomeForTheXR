@@ -204,6 +204,16 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (context != inputContext) {
         if (isGameplay(context) && isGameplay(inputContext)) {
             gesturePresses = 0; // Only glove availability changed in this gameplay frame.
+        } else if ((context == InputContext::MenuAimOnly && usesMenuAim(inputContext)) ||
+                   (inputContext == InputContext::MenuAimOnly && usesMenuAim(context))) {
+            movementStick = {};
+            if (context == InputContext::MenuAimOnly) selectReleased.fill(false);
+            // Keep the pose across the fade. Invalidate a drag even if Unity misses the lock,
+            // and a trigger held during the lock even if Unity missed that press.
+            for (auto& hand : hands) {
+                if (context == InputContext::MenuAimOnly || !hand.selectState.isActive || hand.selectState.currentState)
+                    ++hand.generation;
+            }
         } else {
             actionsActive = false;
             movementStick = turnStick = {};
@@ -222,7 +232,7 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
     XrActiveActionSet active[2]{};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
     if (isGameplay(context)) active[sync.countActiveActionSets++].actionSet = gameSet;
-    if (context == InputContext::Menus || context == InputContext::Levels)
+    if (usesMenuAim(context))
         active[sync.countActiveActionSets++].actionSet = menuSet;
     if (context == InputContext::Levels) active[sync.countActiveActionSets++].actionSet = levelsSet;
     if (!sync.countActiveActionSets) return false;
@@ -267,7 +277,8 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
         for (size_t i = 0; i < hands.size(); ++i) {
             auto& hand = hands[i];
             hand.selectState = readButton(pointerSelect, hand.path);
-            if (freshPress(hand.selectState, selectReleased[i])) tickHand(pointerHaptic, hand.path);
+            if (freshPress(hand.selectState, selectReleased[i]) && context != InputContext::MenuAimOnly)
+                tickHand(pointerHaptic, hand.path);
         }
     }
     actionsActive = true;
@@ -359,9 +370,9 @@ bool StereoSession::readPointerHand(Hand& hand) {
     constexpr auto required = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                               XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     if ((loc.locationFlags & required) != required || (hand.hasTrackedPosition && !positionTracked)) return false;
-    if (!hand.selectState.isActive) return false;
+    if (!hand.selectState.isActive && inputContext != InputContext::MenuAimOnly) return false;
     hand.pose = loc.pose;
-    hand.pressed = hand.selectState.currentState != XR_FALSE;
+    hand.pressed = hand.selectState.isActive && hand.selectState.currentState;
     return true;
 }
 
@@ -501,7 +512,7 @@ bool StereoSession::begin(int unityFrame, InputContext context) {
     if (result != XR_FRAME_DISCARDED) requireXR("xrBeginFrame", result);
     begun = true;
     displayTime = timing.predictedDisplayTime;
-    if (syncInput(unityFrame, context) && !isGameplay(context)) samplePointer();
+    if (syncInput(unityFrame, context) && usesMenuAim(context)) samplePointer();
     if (!timing.shouldRender) return true;
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
     locate.viewConfigurationType = stereo;

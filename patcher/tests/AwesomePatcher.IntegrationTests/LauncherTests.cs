@@ -296,7 +296,10 @@ namespace AwesomePatcher.IntegrationTests
             using (var module = ModuleDefinition.ReadModule(path))
             {
                 var context = module.GetType("AFTXRInputContext").Methods.Single(m => m.Name == "Current");
-                var contextCalls = module.GetTypes().SelectMany(type => type.Methods).Where(m => m.HasBody)
+                var sample = module.GetType("AFTXRMenuPointer").Methods.Single(m => m.Name == "Sample");
+                if (!sample.Body.Instructions.Any(i => i.OpCode == OpCodes.Call && i.Operand == context))
+                    throw new InvalidOperationException("The menu pointer must call the shared input context resolver.");
+                var contextCalls = module.GetTypes().SelectMany(type => type.Methods).Where(m => m.HasBody && m != sample)
                     .SelectMany(m => m.Body.Instructions).Where(i => i.Operand == context)
                     .Select(i => (i.Next.OpCode == OpCodes.Ldloca ? i.Next.Next.Next : i.Next).Operand as MethodReference)
                     .Select(m => m?.Name).OrderBy(name => name);

@@ -14,7 +14,7 @@ internal static partial class MenuPointer
 
     // 0 = unavailable, 1 = tracked and released, 3 = tracked and pressed.
     // A held trigger on reconnection must first be released.
-    internal static int SelectHand(int left, int right, uint leftGeneration, uint rightGeneration)
+    internal static int SelectHand(int left, int right, uint leftGeneration, uint rightGeneration, bool allowActions)
     {
         bool leftInterrupted = leftGeneration != lastLeftGeneration;
         bool rightInterrupted = rightGeneration != lastRightGeneration;
@@ -25,10 +25,10 @@ internal static partial class MenuPointer
         previousLeft = left;
         previousRight = right;
         if (owner < 0 && (right != 0 || left != 0)) owner = right != 0 ? 1 : 0;
-        bool switched = owner == 1 ? leftDown : rightDown;
-        cancelHold = switched || (owner == 0 ? leftInterrupted : rightInterrupted);
+        bool switched = allowActions && (owner == 1 ? leftDown : rightDown);
+        cancelHold = !allowActions || switched || (owner == 0 ? leftInterrupted : rightInterrupted);
         if (switched) owner = 1 - owner;
-        splashDown = !switched && (owner == 0 ? leftDown : rightDown);
+        splashDown = allowActions && !switched && (owner == 0 ? leftDown : rightDown);
         return owner == 0 ? left : right;
     }
 

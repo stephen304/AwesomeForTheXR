@@ -401,6 +401,42 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         check(gestures(number) == 0 && deployPressed(number) == 1, "relocking must clear only cached gestures");
         checkSticks(number, {}, {}, state.sticks[0], state.sticks[1], true);
     }
+
+    context = InputContext::Levels;
+    state.pointerSelect[0].held = state.pointerSelect[1].held = false;
+    frame(++number);
+    checkSticks(number, {}, {}, state.levelStick, {}, false);
+    check(hand(0,tracked) == 1, "missing gallery aim");
+    const float previousY = tracked[1];
+    const auto ticksBeforeFade = state.handTicks[0];
+    const auto syncsBeforeFade = state.actionSyncs;
+    context = InputContext::MenuAimOnly;
+    checkSticks(number, {}, {}, {}, {}, false);
+    check(hand(0,tracked) == 1 && state.actionSyncs == syncsBeforeFade, "same-frame lock lost aim or resynced");
+    state.eyePoses[0].position.y += .2f;
+    state.pointerSelect[0].held = true;
+    state.pointerSelect[1].active = false;
+    frame(++number);
+    check(!state.levelsActive && state.menusActive && hand(1,tracked) == 1, "locked menu lost aim or enabled navigation");
+    check(hand(0,tracked) == 3 && closeTo(tracked[1], previousY + .2f) && state.handTicks[0] == ticksBeforeFade,
+          "locked aim did not move or a locked press vibrated");
+    const auto lockedGeneration = generation[0];
+    state.pointerSelect[1].active = true;
+    frame(++number);
+    check(hand(1,tracked) == 1, "released trigger during the fade");
+    const auto releasedGeneration = generation[1], rightTicksBeforeUnlock = state.handTicks[1];
+    state.pointerSelect[1].held = true;
+    context = InputContext::Menus;
+    frame(++number);
+    check(hand(0,tracked) == 3 && generation[0] != lockedGeneration && state.handTicks[0] == ticksBeforeFade,
+          "held trigger crossed the fade without a button interruption");
+    check(hand(1,tracked) == 3 && generation[1] == releasedGeneration && state.handTicks[1] == rightTicksBeforeUnlock + 1,
+          "fresh trigger on the first unlocked frame was lost");
+    state.pointerSelect[0].held = false;
+    frame(++number);
+    state.pointerSelect[0].held = true;
+    frame(++number);
+    check(hand(0,tracked) == 3 && state.handTicks[0] == ticksBeforeFade + 1, "fresh menu press after the fade");
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {

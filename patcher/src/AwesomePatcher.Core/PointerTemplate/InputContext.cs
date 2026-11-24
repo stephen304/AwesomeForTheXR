@@ -1,7 +1,7 @@
 // Returned to the native plugin from both the camera and GameInput paths.
 internal static class InputContext
 {
-    internal const int Inactive = 0, Menus = 1, Levels = 2, Gameplay = 3, GameplayWithGlove = 4;
+    internal const int Inactive = 0, Menus = 1, Levels = 2, Gameplay = 3, GameplayWithGlove = 4, MenuAimOnly = 5;
     internal static LoaderScene splash;
 
     internal static int Current()
@@ -13,15 +13,16 @@ internal static class InputContext
         var screen = gui != null ? gui.currentScreen : null;
         if (screen != null)
         {
-            if (!gui.InputEnabled || screen is LoadingScreen) return Inactive;
+            if (screen is LoadingScreen) return Inactive;
+            if (!gui.InputEnabled) return MenuAimOnly;
             var levels = screen as LevelSelectScreen;
-            if (levels != null) return levels.inputEnabled ? Levels : Inactive;
+            if (levels != null) return levels.inputEnabled ? Levels : MenuAimOnly;
             var setup = screen as SetupScreen;
-            if (setup != null && !setup.inputEnabled) return Inactive;
+            if (setup != null && !setup.inputEnabled) return MenuAimOnly;
             var graphics = screen as GraphicsScreen;
-            if (graphics != null && !graphics.inputEnabled) return Inactive;
+            if (graphics != null && !graphics.inputEnabled) return MenuAimOnly;
             var choice = screen as ChoiceScreen;
-            if (choice != null && !choice.inputEnabled) return Inactive;
+            if (choice != null && !choice.inputEnabled) return MenuAimOnly;
             return Menus;
         }
 

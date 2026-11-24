@@ -9,7 +9,7 @@ internal static partial class MenuPointer
     private static extern int AFTXR_PointerHand(int hand, out OVRPose pose, out uint generation);
 
     private static OVRCameraRig rig;
-    private static int frame = -1;
+    private static int frame = -1, sampledContext;
     private static bool wanted, hit;
     private static GameScreen screen;
     private static Vector3 uv;
@@ -145,7 +145,9 @@ internal static partial class MenuPointer
             ResetPointer();
             screen = current;
         }
-        if (frame == Time.frameCount) return;
+        int context = InputContext.Current();
+        if (frame == Time.frameCount && sampledContext == context) return;
+        sampledContext = context;
         if (rig == null || rig.centerEyeAnchor == null)
         {
             ResetPointer();
@@ -158,14 +160,15 @@ internal static partial class MenuPointer
         uint leftGeneration, rightGeneration;
         int l = AFTXR_PointerHand(0, out left, out leftGeneration);
         int r = AFTXR_PointerHand(1, out right, out rightGeneration);
-        int state = SelectHand(l, r, leftGeneration, rightGeneration);
+        bool allowActions = context == InputContext.Menus || context == InputContext.Levels;
+        int state = SelectHand(l, r, leftGeneration, rightGeneration, allowActions);
         Cursor cursor = Cursor.singleton;
         Vector3 start = new Vector3(), end = new Vector3();
         Transform tracking = rig.centerEyeAnchor.parent;
         bool wasHeld = held;
         bool ready = wanted && current != null && cursor != null &&
             panel != null && panel.enabled && panel.gameObject.activeInHierarchy;
-        hit = ready && state != 0
+        hit = (allowActions || context == InputContext.MenuAimOnly) && ready && state != 0
             && Intersect(tracking, owner == 0 ? left : right, out start, out end);
         if (cursor != null && cursor.gui != null) cursor.gui.enabled = hit;
         if (wasHeld && (!hit || cancelHold) && gui != null) gui.InvalidateButtonHitOnDown();
@@ -178,7 +181,7 @@ internal static partial class MenuPointer
     }
 
     internal static void UpdateCursor() { if (wanted) Sample(); }
-    internal static bool CanHit() { if (!Options.isVRSupportEnabled) return true; Sample(); return hit; }
+    internal static bool CanHit() { if (!Options.isVRSupportEnabled) return true; Sample(); return hit && sampledContext != InputContext.MenuAimOnly; }
     internal static Ray ButtonRay(Camera camera, Vector3 position)
     {
         if (!Options.isVRSupportEnabled) return camera.ScreenPointToRay(position);

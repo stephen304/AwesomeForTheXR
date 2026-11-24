@@ -7,12 +7,12 @@ namespace AwesomePatcher.IntegrationTests
         private static void TestMenuPointer()
         {
             uint leftGeneration = 0, rightGeneration = 0;
-            void Frame(int left, int right, bool over, int owner, string phases)
+            void Frame(int left, int right, bool over, int owner, string phases, bool allowActions = true)
             {
-                int state = MenuPointer.SelectHand(left, right, leftGeneration, rightGeneration);
+                int state = MenuPointer.SelectHand(left, right, leftGeneration, rightGeneration, allowActions);
                 MenuPointer.UpdateButtons(over && state != 0, state);
                 string actual = (MenuPointer.down ? "d" : "") + (MenuPointer.held ? "h" : "") + (MenuPointer.up ? "u" : "");
-                if (actual != phases || MenuPointer.owner != owner)
+                if (actual != phases || MenuPointer.owner != owner || (!allowActions && MenuPointer.splashDown))
                     throw new InvalidOperationException("Unexpected menu pointer owner or button phase: " + actual);
             }
             Options.isVRSupportEnabled = false;
@@ -74,6 +74,13 @@ namespace AwesomePatcher.IntegrationTests
             Frame(3,1,true,0,""); // Still held after focus returned.
             Frame(1,1,true,0,"");
             Frame(3,1,true,0,"dh");
+            Frame(1,1,true,0,"", false); // Lock during a drag. No release reaches the button.
+            Frame(1,3,true,0,"", false); // Pressing the other hand during the fade cannot take ownership.
+            Frame(1,3,true,0,"");        // Still held on the next screen.
+            Frame(1,1,true,0,"");
+            Frame(1,3,true,1,"");        // A fresh press switches hands only.
+            Frame(1,1,true,1,"");
+            Frame(1,3,true,1,"dh");
             Console.WriteLine("PASS: desktop and VR mouse routing, pointer hand switching, click phases, drag cancellation and tracking recovery.");
         }
     }

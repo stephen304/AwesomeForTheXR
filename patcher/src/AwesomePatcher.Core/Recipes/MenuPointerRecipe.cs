@@ -28,9 +28,10 @@ namespace AwesomePatcher.Core
             return context.Method("Current");
         }
 
-        internal static void Apply(ModuleDefinition game, ModuleReference plugin, ModuleDefinition template)
+        internal static void Apply(ModuleDefinition game, ModuleReference plugin, ModuleDefinition template, MethodDefinition inputContext)
         {
             var recipe = new MenuPointerRecipe(game, plugin, template.GetType("MenuPointer"));
+            recipe.methods.Add(template.GetType("InputContext").Methods.Single(m => m.Name == "Current"), inputContext);
             var rig = game.GetType("OVRCameraRig");
             var setPanel = new MethodDefinition("AFTXR_SetPointerPanel", MethodAttributes.Assembly | MethodAttributes.HideBySig, game.TypeSystem.Void);
             setPanel.Parameters.Add(new ParameterDefinition(recipe.Bind(template.GetType("UnityEngine.MeshFilter"))));
@@ -73,7 +74,7 @@ namespace AwesomePatcher.Core
 
         private MethodReference Bind(MethodReference m)
         {
-            if (m.DeclaringType == source) return methods[(MethodDefinition)m];
+            if (m is MethodDefinition definition && methods.TryGetValue(definition, out var mapped)) return mapped;
             if (Bind(m.DeclaringType) is TypeDefinition retail)
             {
                 var target = retail.Methods.Single(x => x.FullName == m.FullName);

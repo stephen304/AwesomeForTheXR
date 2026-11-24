@@ -37,13 +37,16 @@ namespace AwesomePatcher.IntegrationTests
             gui.currentScreen = new GameScreen();
             Expect(InputContext.Menus, "title, pause or results over a game");
             gui.InputEnabled = false;
-            Expect(InputContext.Inactive, "locked GUI");
+            Expect(InputContext.MenuAimOnly, "unlisted menu with locked GUI");
+            gui.currentScreen = new LoadingScreen();
+            Expect(InputContext.Inactive, "loading with locked GUI");
             gui.InputEnabled = true;
-            foreach (var locked in new GameScreen[] { new LoadingScreen(), new SetupScreen(), new GraphicsScreen(),
+            Expect(InputContext.Inactive, "loading with enabled GUI");
+            foreach (var locked in new GameScreen[] { new SetupScreen(), new GraphicsScreen(),
                 new ChoiceScreen(), new LevelSelectScreen() })
             {
                 gui.currentScreen = locked;
-                Expect(InputContext.Inactive, locked.GetType().Name);
+                Expect(InputContext.MenuAimOnly, locked.GetType().Name);
             }
             foreach (var menu in new GameScreen[] { new SetupScreen { inputEnabled = true },
                 new GraphicsScreen { inputEnabled = true }, new ChoiceScreen { inputEnabled = true } })
