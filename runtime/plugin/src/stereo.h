@@ -29,8 +29,7 @@ public:
     static constexpr int headAnchor = -1;
     void pose(int anchor, float* pose) const;
     int pointer(int hand, float* pose, uint32_t& generation) const;
-    bool deployParachutePressed(int unityFrame, InputContext context);
-    int spectatorGesturePresses(int unityFrame, InputContext context);
+    int getGameplayPresses(int unityFrame, InputContext context);
     bool mergeSticks(int unityFrame, InputContext context, XrVector2f& movement, XrVector2f& look);
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
     void recenter() { recenterPending = true; }
@@ -63,10 +62,9 @@ private:
     bool actionsActive = false;
     XrAction aim = XR_NULL_HANDLE, pointerSelect = XR_NULL_HANDLE, pointerHaptic = XR_NULL_HANDLE;
     XrAction deploy = XR_NULL_HANDLE;
-    bool deployReleased = false, deployPressed = false;
-    XrAction thumbsUp = XR_NULL_HANDLE, flipOff = XR_NULL_HANDLE, pressHaptic = XR_NULL_HANDLE;
-    std::array<bool, 2> selectReleased{}, thumbsUpReleased{}, flipOffReleased{};
-    int gesturePresses = 0;
+    XrAction thumbsUp = XR_NULL_HANDLE, flipOff = XR_NULL_HANDLE, spray = XR_NULL_HANDLE, pressHaptic = XR_NULL_HANDLE;
+    std::array<bool, 2> selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{};
+    int gameplayPresses = 0;
     XrActionStateBoolean readButton(XrAction action, XrPath hand);
     void interruptButtonPresses();
     void tickHand(XrAction output, XrPath hand);

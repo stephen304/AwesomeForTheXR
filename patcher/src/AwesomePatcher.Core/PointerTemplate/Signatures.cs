@@ -116,5 +116,5 @@ class LoadingScreen : GameScreen {}
 class LoaderScene : UnityEngine.Behaviour { public bool loading, hasAnimationBegun; }
 class GameInput : UnityEngine.Behaviour { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController : UnityEngine.Behaviour { public static GameController singleton; }
-static class PlayerData { public static extern bool GloveEnabled { get; } }
+static class PlayerData { public static extern bool GloveEnabled { get; } public static extern bool SprayCanEnabled { get; } }
 static class Utilities { public static extern bool IsMidGame { get; } }

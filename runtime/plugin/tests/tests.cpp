@@ -221,7 +221,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(hand(1,tracked) == 1 && generation[1] == rightBeforeLoss + 1, "missed right-hand interruption");
     check(hand(0,tracked) == 3 && generation[0] == leftBeforeLoss, "right-hand loss interrupted the left drag");
 
-    context = InputContext::GameplayWithGlove;
+    context = InputContext::Gameplay | InputContext::GloveUnlocked;
     auto merge = entry<int (__cdecl*)(int, InputContext, XrVector2f*, XrVector2f*)>(plugin, "AFTXR_MergeGamepadSticks");
     auto checkSticks = [&](int number, XrVector2f padMove, XrVector2f padTurn, XrVector2f wantMove, XrVector2f wantTurn, bool wantXrMove) {
         check(merge(number, context, &padMove, &padTurn) == (wantXrMove ? 1 : 0), "wrong movement source");
@@ -265,57 +265,65 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.sticks[0] = {};
     checkSticks(25, {.49f, -.5f}, {}, {.49f, -.5f}, state.sticks[1], false);
 
-    auto readDeployParachutePressed = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetDeployParachutePressed");
-    auto deployPressed = [&](int number) { return readDeployParachutePressed(number, context); };
+    auto readPresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetGameplayPresses");
+    auto presses = [&](int number) { return readPresses(number, context); };
+    constexpr int deployBit = 8;
+    const auto leftBeforeDeploy = state.handTicks[0], rightBeforeDeploy = state.handTicks[1];
     const auto beforeDeploy = state.actionSyncs;
-    state.deployHeld = true;
-    check(deployPressed(26) == 1 && deployPressed(26) == 1, "deploy press changed between reads");
+    state.deploy[1].held = true;
+    check(presses(26) == deployBit && presses(26) == deployBit, "deploy press changed between reads");
     frame(26);
-    check(deployPressed(27) == 0 && state.actionSyncs == beforeDeploy + 2, "held deploy or duplicate sync");
-    state.deployHeld = false;
-    check(deployPressed(28) == 0, "release produced a press");
-    state.deployActive = false;
-    state.deployHeld = true;
-    check(deployPressed(29) == 0, "inactive deploy");
-    state.deployActive = true;
-    check(deployPressed(30) == 0, "reconnected while held");
-    state.deployHeld = false;
-    check(deployPressed(31) == 0, "release after reconnect");
+    check(state.handTicks[0] == leftBeforeDeploy && state.handTicks[1] == rightBeforeDeploy + 1,
+          "right deploy must tick the right hand exactly once");
+    state.deploy[0].held = true; // Custom left binding while the right button is still down.
+    check(presses(27) == deployBit && state.actionSyncs == beforeDeploy + 2 &&
+          state.handTicks[0] == leftBeforeDeploy + 1 && state.handTicks[1] == rightBeforeDeploy + 1,
+          "a fresh left deploy was masked or the held right button ticked again");
+    state.deploy[0].held = false;
+    state.deploy[1].held = false;
+    check(presses(28) == 0, "release produced a press");
+    state.deploy[1].active = false;
+    state.deploy[1].held = true;
+    check(presses(29) == 0, "inactive deploy");
+    state.deploy[1].active = true;
+    check(presses(30) == 0, "reconnected while held");
+    state.deploy[1].held = false;
+    check(presses(31) == 0, "release after reconnect");
     state.nextEvent = XR_SESSION_STATE_VISIBLE;
     state.followingEvent = XR_SESSION_STATE_FOCUSED;
-    state.deployHeld = true;
+    state.deploy[1].held = true;
     frame(32);
-    check(deployPressed(32) == 0, "held across dashboard");
-    state.deployHeld = false;
-    check(deployPressed(33) == 0, "release after dashboard");
-    state.deployHeld = true;
-    check(deployPressed(35) == 0, "press leaked across an unsampled frame");
-    state.deployHeld = false;
-    check(deployPressed(36) == 0, "release after input gap");
-    state.deployHeld = true;
-    check(deployPressed(37) == 1, "fresh press after recovery");
+    check(presses(32) == 0, "held across dashboard");
+    state.deploy[1].held = false;
+    check(presses(33) == 0, "release after dashboard");
+    state.deploy[1].held = true;
+    check(presses(35) == 0, "press leaked across an unsampled frame");
+    state.deploy[1].held = false;
+    check(presses(36) == 0, "release after input gap");
+    state.deploy[1].held = true;
+    check(presses(37) == deployBit && state.handTicks[0] == leftBeforeDeploy + 1 &&
+          state.handTicks[1] == rightBeforeDeploy + 2, "fresh press after recovery");
 
     state.handTicks[0] = state.handTicks[1] = 0;
-    auto readSpectatorGesturePresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetSpectatorGesturePresses");
-    auto gestures = [&](int number) { return readSpectatorGesturePresses(number, context); };
     state.thumbsUp[0].held = true;
-    check(gestures(38) == 1 && state.handTicks[0] == 1 && state.handTicks[1] == 0, "left pad feedback");
+    check(presses(38) == 1 && state.handTicks[0] == 1 && state.handTicks[1] == 0, "left pad feedback");
     state.flipOff[1].held = true;
-    check(gestures(39) == 2 && state.handTicks[0] == 1 && state.handTicks[1] == 1, "right grip feedback while left pad held");
+    check(presses(39) == 2 && state.handTicks[0] == 1 && state.handTicks[1] == 1, "right grip feedback while left pad held");
     state.thumbsUp[1].held = state.flipOff[0].held = true;
-    check(gestures(40) == 3 && gestures(40) == 3, "opposite hands masked or consumed a fresh press");
-    check(gestures(41) == 0, "held gestures repeated");
+    check(presses(40) == 3 && presses(40) == 3, "opposite hands masked or consumed a fresh press");
+    check(presses(41) == 0, "held gestures repeated");
     state.thumbsUp[1].active = false;
     state.thumbsUp[1].held = false;
-    check(gestures(42) == 0, "inactive pad");
+    check(presses(42) == 0, "inactive pad");
     state.thumbsUp[1].active = state.thumbsUp[1].held = true;
-    check(gestures(43) == 0, "reconnected pad fired while held");
+    check(presses(43) == 0, "reconnected pad fired while held");
     check(state.handTicks[0] == 2 && state.handTicks[1] == 2, "duplicate feedback or wrong hand");
     state.thumbsUp[0].held = state.flipOff[0].held = false;
-    check(gestures(44) == 0, "gesture release fired");
+    check(presses(44) == 0, "gesture release fired");
+    state.deploy[1].held = false; // Observe a release in gameplay before A is held through the menu.
     state.hapticResult = XR_ERROR_RUNTIME_FAILURE;
     state.thumbsUp[0].held = state.flipOff[0].held = true;
-    check(gestures(45) == 3 && state.handTicks[0] == 3 && state.handTicks[1] == 2,
+    check(presses(45) == 3 && state.handTicks[0] == 3 && state.handTicks[1] == 2,
           "simultaneous gestures on one hand need one tick and both inputs even if vibration fails");
 
     context = InputContext::Menus;
@@ -323,23 +331,22 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.handActive[0] = true;
     state.pointerSelect[0].held = state.pointerSelect[1].held = false;
     state.flipOff[0].held = false;
-    state.deployHeld = false;
     frame(46);
-    state.deployHeld = true;
+    state.deploy[1].held = true;
     state.pointerSelect[1].held = true;
-    check(deployPressed(47) == 0, "a fresh press in the menu must not request deployment");
-    check(gestures(47) == 0, "right trigger fired a gesture");
+    check(presses(47) == 0, "menu inputs must not produce gameplay presses");
     frame(47); // Input collection and rendering both see this press.
     check(hand(1,tracked) == 3 && state.handTicks[0] == 3 && state.handTicks[1] == 3, "right trigger feedback");
     state.pointerSelect[0].held = true;
     frame(48); // The other hand can take the pointer while the right trigger is held.
-    check(hand(0,tracked) == 3 && gestures(48) == 0 && state.handTicks[0] == 4 && state.handTicks[1] == 3,
+    check(hand(0,tracked) == 3 && presses(48) == 0 && state.handTicks[0] == 4 && state.handTicks[1] == 3,
           "left trigger feedback while right held");
     state.pointerSelect[0].held = false;
     frame(49);
     state.flipOff[0].held = state.pointerSelect[0].held = true;
+    state.spray[0].held = true; // The held menu trigger also drives spray when gameplay resumes.
     frame(50);
-    check(gestures(50) == 0 && state.handTicks[0] == 5 && state.handTicks[1] == 3, "menu trigger must tick without firing the grip action");
+    check(presses(50) == 0 && state.handTicks[0] == 5 && state.handTicks[1] == 3, "menu trigger must tick without firing the grip action");
     checkSticks(50, {}, {}, {}, {}, false);
     context = InputContext::Levels;
     state.levelStickActive = false;
@@ -359,46 +366,86 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(state.actionSyncs == gallerySyncs && hand(0,tracked) == 0 && hand(1,tracked) == 0,
           "loading polled input or kept a gallery pointer");
     const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
-    context = InputContext::GameplayWithGlove;
+    context = InputContext::Gameplay | InputContext::GloveUnlocked | InputContext::SprayCanUnlocked;
     state.stickActive[1] = true;
     frame(54);
-    check(state.gameActive && !state.menusActive && state.actionSyncs == gallerySyncs + 1 &&
-          gestures(54) == 0 && deployPressed(54) == 0 &&
-          state.handTicks[0] == leftTicks && state.handTicks[1] == rightTicks,
-          "held buttons leaked into gameplay after loading");
-    checkSticks(54, {}, {}, {}, state.sticks[1], false);
+    check(state.gameActive && !state.menusActive && state.actionSyncs == gallerySyncs + 1, "gameplay did not resume with one sync");
+    check(state.deploy[1].synced && state.deploy[1].changed, "fixture missed held deploy on the first gameplay sync");
+    check(!(presses(54) & deployBit) && state.handTicks[1] == rightTicks, "held deploy fired or vibrated on gameplay entry");
+    check(state.spray[0].synced && state.spray[0].changed, "fixture missed the held trigger on the first gameplay sync");
+    int number = 54;
+    auto checkSpray = [&](int expected, unsigned leftTickCount, const char* message) {
+        check(presses(number) == expected && state.handTicks[0] == leftTickCount && state.handTicks[1] == rightTicks, message);
+    };
+    checkSpray(0, leftTicks, "held menu trigger sprayed or vibrated on gameplay entry");
+    checkSticks(number, {}, {}, {}, state.sticks[1], false);
+    frame(++number);
+    checkSpray(0, leftTicks, "held menu trigger fired on a later gameplay frame");
+    state.spray[0].held = false;
+    frame(++number);
+    checkSpray(0, leftTicks, "releasing the menu trigger fired spray");
+    state.spray[0].held = true;
+    frame(++number);
+    checkSpray(4, leftTicks + 1, "fresh trigger pull after release did not spray and tick the left hand once");
 
     // Both consumers can synchronize first. Each press must produce the same result in either order.
-    int number = 54;
     for (bool cameraFirst : {false, true}) {
-        auto sample = [&](int expectedPresses, unsigned ticksPerHand) {
+        auto sample = [&](int expectedPresses, unsigned left, unsigned right) {
             ++number;
             const auto syncsBefore = state.actionSyncs;
             const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
             if (cameraFirst) frame(number);
-            check(gestures(number) == expectedPresses, "wrong glove-gated gesture");
+            check(presses(number) == expectedPresses, "wrong gameplay presses");
             if (!cameraFirst) frame(number);
-            check(gestures(number) == expectedPresses && state.actionSyncs == syncsBefore + 1,
-                  "camera and GameInput did not share one gesture sample");
-            check(state.handTicks[0] == leftTicks + ticksPerHand && state.handTicks[1] == rightTicks + ticksPerHand,
-                  "wrong haptic count for glove state or call order");
+            check(presses(number) == expectedPresses && state.actionSyncs == syncsBefore + 1,
+                  "camera and GameInput did not share one gameplay button sample");
+            check(state.handTicks[0] == leftTicks + left && state.handTicks[1] == rightTicks + right,
+                  "wrong haptic count for equipment state or call order");
         };
+        const auto glove = InputContext::Gameplay | InputContext::GloveUnlocked;
+        const auto can = InputContext::Gameplay | InputContext::SprayCanUnlocked;
         context = InputContext::Gameplay;
-        state.thumbsUp[0].held = state.flipOff[1].held = false;
-        sample(0, 0);
-        state.thumbsUp[0].held = state.flipOff[1].held = true;
-        sample(0, 0);
-        context = InputContext::GameplayWithGlove;
-        sample(0, 0); // Held across unlock.
-        state.thumbsUp[0].held = state.flipOff[1].held = false;
-        state.deployHeld = false;
-        sample(0, 0);
-        state.thumbsUp[0].held = state.flipOff[1].held = state.deployHeld = true;
+        auto holdAll = [&](bool held) {
+            for (int hand : {0, 1}) {
+                state.thumbsUp[hand].held = state.flipOff[hand].held = state.spray[hand].held = held;
+            }
+        };
+        holdAll(false);
+        state.deploy[0].held = state.deploy[1].held = false;
+        sample(0, 0, 0);
+        holdAll(true);
+        state.deploy[1].held = true;
+        sample(deployBit, 0, 1); // Locked equipment cannot silence a fresh deploy or tick the other hand.
+        context = can | InputContext::GloveUnlocked;
+        sample(0, 0, 0); // Held through both unlocks.
+        holdAll(false);
+        state.deploy[1].held = false;
+        sample(0, 0, 0);
+        state.deploy[0].held = state.deploy[1].held = true;
+        sample(deployBit, 1, 1); // Only deploy is pressed: one request and one tick on each hand.
+        context = can;
+        state.spray[0].held = state.thumbsUp[0].held = true;
+        sample(4, 1, 0); // Left spray with glove locked.
+        state.spray[1].held = true;
+        sample(4, 0, 1); // Right spray while left remains held.
+        context = glove;
+        holdAll(false);
+        sample(0, 0, 0);
+        state.spray[0].held = state.flipOff[1].held = true;
+        sample(2, 0, 1); // Left spray stays silent with only the glove unlocked.
+        holdAll(false);
+        state.deploy[0].held = state.deploy[1].held = false;
+        sample(0, 0, 0);
+        context = can | InputContext::GloveUnlocked;
+        holdAll(true);
+        state.deploy[0].held = state.deploy[1].held = true;
         state.sticks[0] = {.75f, 0};
-        sample(3, 1);
-        check(deployPressed(number) == 1, "deployment alongside gestures");
+        sample(7 | deployBit, 1, 1); // Both hands deploy; all eligible presses share one tick per hand.
+        context = cameraFirst ? glove : can;
+        check(presses(number) == ((cameraFirst ? 3 : 4) | deployBit),
+              "relocking one item discarded another item's press");
         context = InputContext::Gameplay;
-        check(gestures(number) == 0 && deployPressed(number) == 1, "relocking must clear only cached gestures");
+        check(presses(number) == deployBit, "relocking equipment must preserve only the deployment press");
         checkSticks(number, {}, {}, state.sticks[0], state.sticks[1], true);
     }
 
@@ -476,15 +523,15 @@ void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseS
         for (int i = 0; i < 2; ++i) checkEyePixels(device, state.eyeImages[i], colors[i]);
     };
 
-    auto deployPressed = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetDeployParachutePressed");
+    auto presses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetGameplayPresses");
     context = InputContext::Inactive;
     state.followingEvent = XR_SESSION_STATE_FOCUSED;
     stereoFrame(1); // The headset gains focus before the splash accepts input.
     check(state.starts == 1 && state.projections == 1 && state.releases == 2, "first stereo projection");
-    check(deployPressed(1, context) == 0 && state.actionSyncs == 0, "focused splash polled input");
+    check(presses(1, context) == 0 && state.actionSyncs == 0, "focused splash polled input");
     context = InputContext::Menus;
     check(begin(2) == 1, "begin incomplete frame");
-    check(deployPressed(2, context) == 0 && state.menusActive && state.actionSyncs == 1,
+    check(presses(2, context) == 0 && state.menusActive && state.actionSyncs == 1,
           "first interactive menu frame must sync once");
     rendered(0, eyes[0].Get(), 2);
     submit(endFrameEvent);

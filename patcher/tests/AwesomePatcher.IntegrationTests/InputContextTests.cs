@@ -10,7 +10,7 @@ class GUIController { public static GUIController instance; public bool InputEna
 class LoaderScene { public bool loading, hasAnimationBegun; }
 class GameInput { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController { public static GameController singleton; }
-static class PlayerData { public static bool GloveEnabled; }
+static class PlayerData { public static bool GloveEnabled, SprayCanEnabled; }
 static class Utilities { public static bool IsMidGame; }
 
 namespace AwesomePatcher.IntegrationTests
@@ -65,9 +65,13 @@ namespace AwesomePatcher.IntegrationTests
             input.inputEnabled = true;
             Expect(InputContext.Gameplay, "live play with locked glove");
             PlayerData.GloveEnabled = true;
-            Expect(InputContext.GameplayWithGlove, "live play with unlocked glove");
+            Expect(InputContext.Gameplay | InputContext.GloveUnlocked, "live play with glove only");
+            PlayerData.SprayCanEnabled = true;
+            Expect(InputContext.Gameplay | InputContext.GloveUnlocked | InputContext.SprayCanUnlocked, "both items");
+            PlayerData.GloveEnabled = false;
+            Expect(InputContext.Gameplay | InputContext.SprayCanUnlocked, "spray can only");
             gui.currentScreen = new GameScreen();
-            Expect(InputContext.Menus, "pause with unlocked glove");
+            Expect(InputContext.Menus, "pause with unlocked spray can");
             gui.currentScreen = null;
             Utilities.IsMidGame = false;
             Expect(InputContext.Inactive, "replay or scene transition");
@@ -75,7 +79,7 @@ namespace AwesomePatcher.IntegrationTests
             GameController.singleton = null;
             GUIController.instance = null;
             Expect(InputContext.Inactive, "startup without controllers");
-            PlayerData.GloveEnabled = false;
+            PlayerData.SprayCanEnabled = false;
         }
     }
 }

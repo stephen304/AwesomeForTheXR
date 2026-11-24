@@ -398,17 +398,10 @@ extern "C" int __cdecl AFTXR_MergeGamepadSticks(int frame, InputContext context,
     catch (const std::exception& e) { failStereo(e.what()); return 0; }
 }
 
-extern "C" int __cdecl AFTXR_GetSpectatorGesturePresses(int frame, InputContext context) {
+extern "C" int __cdecl AFTXR_GetGameplayPresses(int frame, InputContext context) {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (!launch.stereo || launch.stereoFailed) return 0;
-    try { return launch.stereo->spectatorGesturePresses(frame, context); }
-    catch (const std::exception& e) { failStereo(e.what()); return 0; }
-}
-
-extern "C" int __cdecl AFTXR_GetDeployParachutePressed(int frame, InputContext context) {
-    std::lock_guard<std::mutex> lock(launchMutex);
-    if (!launch.stereo || launch.stereoFailed) return 0;
-    try { return launch.stereo->deployParachutePressed(frame, context); }
+    try { return launch.stereo->getGameplayPresses(frame, context); }
     catch (const std::exception& e) { failStereo(e.what()); return 0; }
 }
 

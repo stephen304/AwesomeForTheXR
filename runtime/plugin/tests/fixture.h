@@ -24,9 +24,8 @@ struct Fixture {
     bool levelStickActive = true;
     XrVector2f levelStick{-.85f, .7f};
     bool syncNotFocused = false;
-    bool deployActive = true, deployHeld = false, syncedDeploy = false, deployChanged = false;
     struct Button { bool held = false, synced = false, changed = false, active = true; };
-    Button pointerSelect[2]{{true}, {}}, thumbsUp[2], flipOff[2];
+    Button pointerSelect[2]{{true}, {}}, deploy[2], thumbsUp[2], flipOff[2], spray[2];
     unsigned handTicks[2]{};
     XrResult hapticResult = XR_SUCCESS;
     bool stickActive[2] = {true, true};

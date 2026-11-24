@@ -17,6 +17,14 @@ namespace {
 constexpr auto stereo = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
 constexpr auto validPose = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
 
+// Press bits shared with the injected GameInput getters.
+enum GameplayPress { ThumbsUpPress = 1, FlipOffPress = 2, SprayPress = 4, DeployPress = 8 };
+
+int enabledGameplayPresses(InputContext context) {
+    return DeployPress | (hasFlag(context, InputContext::GloveUnlocked) ? ThumbsUpPress | FlipOffPress : 0) |
+           (hasFlag(context, InputContext::SprayCanUnlocked) ? SprayPress : 0);
+}
+
 void requireXR(const char* operation, XrResult result) {
     if (result == XR_SUCCESS) return;
     const char* name = "unknown XrResult";
@@ -143,14 +151,15 @@ void StereoSession::openInput() {
     };
     action(menuSet, XR_ACTION_TYPE_POSE_INPUT, "aim", "Point at menu", aim, true);
     action(menuSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "pointer_select", "Select with pointer / switch hand", pointerSelect, true);
-    action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "deploy_parachute", "Deploy parachute", deploy);
+    action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "deploy_parachute", "Deploy parachute", deploy, true);
     action(menuSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "pointer_haptic", "Pointer press feedback", pointerHaptic, true);
     action(levelsSet, XR_ACTION_TYPE_VECTOR2F_INPUT, "navigate", "Move level highlight", navigate);
     action(gameSet, XR_ACTION_TYPE_VECTOR2F_INPUT, "move", "Move", move);
     action(gameSet, XR_ACTION_TYPE_VECTOR2F_INPUT, "turn", "Turn", turn);
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "thumbs_up", "Thumbs up", thumbsUp, true);
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "flip_off", "Flip off", flipOff, true);
-    action(gameSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "gesture_haptic", "Spectator gesture feedback", pressHaptic, true);
+    action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "spray_graffiti", "Spray graffiti", spray, true);
+    action(gameSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "gesture_haptic", "Gameplay press feedback", pressHaptic, true);
     struct Profile { const char *name, *button, *stick, *padPress, *gripPress; bool hasRightA = false; };
     for (const Profile profile : {
         Profile{"khr/simple_controller", "select/click", nullptr, nullptr, nullptr},
@@ -166,6 +175,7 @@ void StereoSession::openInput() {
             bindings.push_back({pointerHaptic, haptic});
             bindings.push_back({aim, path(input + "aim/pose")});
             bindings.push_back({pointerSelect, path(input + profile.button)});
+            bindings.push_back({spray, path(input + profile.button)});
             if (profile.padPress) bindings.push_back({thumbsUp, path(input + profile.padPress)});
             if (profile.gripPress) bindings.push_back({flipOff, path(input + profile.gripPress)});
             if (profile.stick) {
@@ -203,7 +213,7 @@ void StereoSession::openInput() {
 bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (context != inputContext) {
         if (isGameplay(context) && isGameplay(inputContext)) {
-            gesturePresses = 0; // Only glove availability changed in this gameplay frame.
+            gameplayPresses &= enabledGameplayPresses(context);
         } else if ((context == InputContext::MenuAimOnly && usesMenuAim(inputContext)) ||
                    (inputContext == InputContext::MenuAimOnly && usesMenuAim(context))) {
             movementStick = {};
@@ -259,18 +269,19 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (isGameplay(context)) {
         movementStick = readStick(move);
         turnStick = readStick(turn);
-        deployPressed = freshPress(readButton(deploy, XR_NULL_PATH), deployReleased);
-        gesturePresses = 0;
+        const int enabled = enabledGameplayPresses(context);
+        gameplayPresses = 0;
         for (size_t i = 0; i < hands.size(); ++i) {
             const XrPath hand = hands[i].path;
-            const bool up = freshPress(readButton(thumbsUp, hand), thumbsUpReleased[i]);
-            const bool flip = freshPress(readButton(flipOff, hand), flipOffReleased[i]);
-            // Track releases while locked so holding a button through unlock cannot fire it.
-            if (context == InputContext::GameplayWithGlove) {
-                if (up) gesturePresses |= 1;
-                if (flip) gesturePresses |= 2;
-                if (up || flip) tickHand(pressHaptic, hand);
-            }
+            // Track all releases even while locked. Only unlocked presses can fire or vibrate.
+            int presses = 0;
+            if (freshPress(readButton(deploy, hand), deployReleased[i])) presses |= DeployPress;
+            if (freshPress(readButton(thumbsUp, hand), thumbsUpReleased[i])) presses |= ThumbsUpPress;
+            if (freshPress(readButton(flipOff, hand), flipOffReleased[i])) presses |= FlipOffPress;
+            if (freshPress(readButton(spray, hand), sprayReleased[i])) presses |= SprayPress;
+            presses &= enabled;
+            gameplayPresses |= presses;
+            if (presses) tickHand(pressHaptic, hand);
         }
     } else {
         if (context == InputContext::Levels) movementStick = readStick(navigate);
@@ -307,19 +318,16 @@ void StereoSession::tickHand(XrAction output, XrPath hand) {
 }
 
 void StereoSession::interruptButtonPresses() {
-    deployPressed = deployReleased = false;
+    deployReleased.fill(false);
     selectReleased.fill(false);
     thumbsUpReleased.fill(false);
     flipOffReleased.fill(false);
-    gesturePresses = 0;
+    sprayReleased.fill(false);
+    gameplayPresses = 0;
 }
 
-int StereoSession::spectatorGesturePresses(int unityFrame, InputContext context) {
-    return syncInput(unityFrame, context) ? gesturePresses : 0;
-}
-
-bool StereoSession::deployParachutePressed(int unityFrame, InputContext context) {
-    return syncInput(unityFrame, context) && deployPressed;
+int StereoSession::getGameplayPresses(int unityFrame, InputContext context) {
+    return syncInput(unityFrame, context) ? gameplayPresses : 0;
 }
 
 bool StereoSession::mergeSticks(int unityFrame, InputContext context, XrVector2f& movement, XrVector2f& look) {

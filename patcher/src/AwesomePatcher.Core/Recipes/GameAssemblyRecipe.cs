@@ -10,7 +10,7 @@ namespace AwesomePatcher.Core
     internal static class GameAssemblyRecipe
     {
         internal const string OriginalHash = "5CF071B3717923AB22111754867F8091F9977C7088BCCA82963D34F033688D97";
-        internal const string PatchedHash = "AAB7E189F25DB72BA77BE594305D0640A4742E6258BA1471B0CAE7A0AC02E2CF";
+        internal const string PatchedHash = "75F9675DE0DEF8662222A3DB135638D1D3537ACB7DE1472E86A2F948BF2A505A";
         private const string VrDisabled = "AwesomeForTheXR | VR mode disabled";
         private const string ModuleId = "9cdf774b-84c8-4e61-9bc0-b2132f76e6fe";
 

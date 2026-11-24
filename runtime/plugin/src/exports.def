@@ -10,8 +10,7 @@ EXPORTS
     AFTXR_BeginCameraFrame
     AFTXR_PointerHand
     AFTXR_MergeGamepadSticks
-    AFTXR_GetDeployParachutePressed
-    AFTXR_GetSpectatorGesturePresses
+    AFTXR_GetGameplayPresses
     AFTXR_EyePose
     AFTXR_EyeProjection
     AFTXR_EyeDescription
