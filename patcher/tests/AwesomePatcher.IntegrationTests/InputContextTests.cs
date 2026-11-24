@@ -10,6 +10,7 @@ class GUIController { public static GUIController instance; public bool InputEna
 class LoaderScene { public bool loading, hasAnimationBegun; }
 class GameInput { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController { public static GameController singleton; }
+static class PlayerData { public static bool GloveEnabled; }
 static class Utilities { public static bool IsMidGame; }
 
 namespace AwesomePatcher.IntegrationTests
@@ -59,13 +60,19 @@ namespace AwesomePatcher.IntegrationTests
             input.inputEnabled = false;
             Expect(InputContext.Inactive, "game input lock");
             input.inputEnabled = true;
-            Expect(InputContext.Gameplay, "live play and tutorial HUD");
+            Expect(InputContext.Gameplay, "live play with locked glove");
+            PlayerData.GloveEnabled = true;
+            Expect(InputContext.GameplayWithGlove, "live play with unlocked glove");
+            gui.currentScreen = new GameScreen();
+            Expect(InputContext.Menus, "pause with unlocked glove");
+            gui.currentScreen = null;
             Utilities.IsMidGame = false;
             Expect(InputContext.Inactive, "replay or scene transition");
             GameInput.singleton = null;
             GameController.singleton = null;
             GUIController.instance = null;
             Expect(InputContext.Inactive, "startup without controllers");
+            PlayerData.GloveEnabled = false;
         }
     }
 }

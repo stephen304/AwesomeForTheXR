@@ -221,7 +221,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(hand(1,tracked) == 1 && generation[1] == rightBeforeLoss + 1, "missed right-hand interruption");
     check(hand(0,tracked) == 3 && generation[0] == leftBeforeLoss, "right-hand loss interrupted the left drag");
 
-    context = InputContext::Gameplay;
+    context = InputContext::GameplayWithGlove;
     auto merge = entry<int (__cdecl*)(int, InputContext, XrVector2f*, XrVector2f*)>(plugin, "AFTXR_MergeGamepadSticks");
     auto checkSticks = [&](int number, XrVector2f padMove, XrVector2f padTurn, XrVector2f wantMove, XrVector2f wantTurn, bool wantXrMove) {
         check(merge(number, context, &padMove, &padTurn) == (wantXrMove ? 1 : 0), "wrong movement source");
@@ -354,14 +354,53 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     context = InputContext::Inactive;
     checkSticks(52, {}, {}, {}, {}, false);
     check(state.actionSyncs == gallerySyncs, "transition performed a second sync in one frame");
+    checkSticks(53, {}, {}, {}, {}, false); // GameInput samples the loading screen before the camera.
     frame(53);
-    check(!state.levelsActive && !state.menusActive && !state.gameActive, "loading activated actions");
-    context = InputContext::Gameplay;
+    check(state.actionSyncs == gallerySyncs && hand(0,tracked) == 0 && hand(1,tracked) == 0,
+          "loading polled input or kept a gallery pointer");
+    const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
+    context = InputContext::GameplayWithGlove;
     state.stickActive[1] = true;
     frame(54);
-    check(state.gameActive && !state.menusActive && gestures(54) == 0 && deployPressed(54) == 0,
-          "held buttons leaked into gameplay");
+    check(state.gameActive && !state.menusActive && state.actionSyncs == gallerySyncs + 1 &&
+          gestures(54) == 0 && deployPressed(54) == 0 &&
+          state.handTicks[0] == leftTicks && state.handTicks[1] == rightTicks,
+          "held buttons leaked into gameplay after loading");
     checkSticks(54, {}, {}, {}, state.sticks[1], false);
+
+    // Both consumers can synchronize first. Each press must produce the same result in either order.
+    int number = 54;
+    for (bool cameraFirst : {false, true}) {
+        auto sample = [&](int expectedPresses, unsigned ticksPerHand) {
+            ++number;
+            const auto syncsBefore = state.actionSyncs;
+            const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
+            if (cameraFirst) frame(number);
+            check(gestures(number) == expectedPresses, "wrong glove-gated gesture");
+            if (!cameraFirst) frame(number);
+            check(gestures(number) == expectedPresses && state.actionSyncs == syncsBefore + 1,
+                  "camera and GameInput did not share one gesture sample");
+            check(state.handTicks[0] == leftTicks + ticksPerHand && state.handTicks[1] == rightTicks + ticksPerHand,
+                  "wrong haptic count for glove state or call order");
+        };
+        context = InputContext::Gameplay;
+        state.thumbsUp[0].held = state.flipOff[1].held = false;
+        sample(0, 0);
+        state.thumbsUp[0].held = state.flipOff[1].held = true;
+        sample(0, 0);
+        context = InputContext::GameplayWithGlove;
+        sample(0, 0); // Held across unlock.
+        state.thumbsUp[0].held = state.flipOff[1].held = false;
+        state.deployHeld = false;
+        sample(0, 0);
+        state.thumbsUp[0].held = state.flipOff[1].held = state.deployHeld = true;
+        state.sticks[0] = {.75f, 0};
+        sample(3, 1);
+        check(deployPressed(number) == 1, "deployment alongside gestures");
+        context = InputContext::Gameplay;
+        check(gestures(number) == 0 && deployPressed(number) == 1, "relocking must clear only cached gestures");
+        checkSticks(number, {}, {}, state.sticks[0], state.sticks[1], true);
+    }
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {
@@ -401,9 +440,16 @@ void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseS
         for (int i = 0; i < 2; ++i) checkEyePixels(device, state.eyeImages[i], colors[i]);
     };
 
-    stereoFrame(1);
+    auto deployPressed = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetDeployParachutePressed");
+    context = InputContext::Inactive;
+    state.followingEvent = XR_SESSION_STATE_FOCUSED;
+    stereoFrame(1); // The headset gains focus before the splash accepts input.
     check(state.starts == 1 && state.projections == 1 && state.releases == 2, "first stereo projection");
+    check(deployPressed(1, context) == 0 && state.actionSyncs == 0, "focused splash polled input");
+    context = InputContext::Menus;
     check(begin(2) == 1, "begin incomplete frame");
+    check(deployPressed(2, context) == 0 && state.menusActive && state.actionSyncs == 1,
+          "first interactive menu frame must sync once");
     rendered(0, eyes[0].Get(), 2);
     submit(endFrameEvent);
     check(state.emptyFrames == 1 && state.projections == 1 && state.releases == 2, "submitted a stale eye");

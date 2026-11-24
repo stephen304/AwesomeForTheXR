@@ -202,11 +202,15 @@ void StereoSession::openInput() {
 
 bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (context != inputContext) {
+        if (isGameplay(context) && isGameplay(inputContext)) {
+            gesturePresses = 0; // Only glove availability changed in this gameplay frame.
+        } else {
+            actionsActive = false;
+            movementStick = turnStick = {};
+            interruptButtonPresses();
+            for (auto& hand : hands) hand.interrupt();
+        }
         inputContext = context;
-        actionsActive = false;
-        movementStick = turnStick = {};
-        interruptButtonPresses();
-        for (auto& hand : hands) hand.interrupt();
     }
     if (!running || finished || state != XR_SESSION_STATE_FOCUSED) return false;
     // A context change after this frame's sync drops the old inputs immediately.
@@ -217,11 +221,12 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
     actionsActive = false;
     XrActiveActionSet active[2]{};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
-    if (context == InputContext::Gameplay) active[sync.countActiveActionSets++].actionSet = gameSet;
+    if (isGameplay(context)) active[sync.countActiveActionSets++].actionSet = gameSet;
     if (context == InputContext::Menus || context == InputContext::Levels)
         active[sync.countActiveActionSets++].actionSet = menuSet;
     if (context == InputContext::Levels) active[sync.countActiveActionSets++].actionSet = levelsSet;
-    sync.activeActionSets = sync.countActiveActionSets ? active : nullptr;
+    if (!sync.countActiveActionSets) return false;
+    sync.activeActionSets = active;
     const auto result = SyncActions(session, &sync);
     if (result == XR_SESSION_NOT_FOCUSED) {
         interruptButtonPresses();
@@ -241,8 +246,7 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
         released = value.isActive && !value.currentState;
         return pressed;
     };
-    if (!sync.countActiveActionSets) return false;
-    if (context == InputContext::Gameplay) {
+    if (isGameplay(context)) {
         movementStick = readStick(move);
         turnStick = readStick(turn);
         deployPressed = freshPress(readButton(deploy, XR_NULL_PATH), deployReleased);
@@ -251,9 +255,12 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
             const XrPath hand = hands[i].path;
             const bool up = freshPress(readButton(thumbsUp, hand), thumbsUpReleased[i]);
             const bool flip = freshPress(readButton(flipOff, hand), flipOffReleased[i]);
-            if (up) gesturePresses |= 1;
-            if (flip) gesturePresses |= 2;
-            if (up || flip) tickHand(pressHaptic, hand);
+            // Track releases while locked so holding a button through unlock cannot fire it.
+            if (context == InputContext::GameplayWithGlove) {
+                if (up) gesturePresses |= 1;
+                if (flip) gesturePresses |= 2;
+                if (up || flip) tickHand(pressHaptic, hand);
+            }
         }
     } else {
         if (context == InputContext::Levels) movementStick = readStick(navigate);
@@ -313,7 +320,7 @@ bool StereoSession::mergeSticks(int unityFrame, InputContext context, XrVector2f
     const bool useXrMovement = largestAxis(movementStick) > (padStrength > .5f ? padStrength : 0.f);
     if (useXrMovement) movement = movementStick;
     if (lengthSquared(turnStick) > lengthSquared(look)) look = turnStick;
-    return useXrMovement && context == InputContext::Gameplay;
+    return useXrMovement && isGameplay(context);
 }
 
 void StereoSession::samplePointer() {
@@ -494,7 +501,7 @@ bool StereoSession::begin(int unityFrame, InputContext context) {
     if (result != XR_FRAME_DISCARDED) requireXR("xrBeginFrame", result);
     begun = true;
     displayTime = timing.predictedDisplayTime;
-    if (syncInput(unityFrame, context) && context != InputContext::Gameplay) samplePointer();
+    if (syncInput(unityFrame, context) && !isGameplay(context)) samplePointer();
     if (!timing.shouldRender) return true;
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
     locate.viewConfigurationType = stereo;

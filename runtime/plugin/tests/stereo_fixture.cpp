@@ -170,14 +170,15 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInf
     expect(s == session && attached && sessionState == XR_SESSION_STATE_FOCUSED);
     auto& fixture = currentFixture();
     const auto count = info->countActiveActionSets;
+    ++fixture.actionSyncs;
+    if (count == 0) return XR_ERROR_RUNTIME_FAILURE; // SteamVR rejects an empty sync.
     const auto* sets = info->activeActionSets;
     fixture.menusActive = count >= 1 && sets[0].actionSet == menuSet;
     fixture.gameActive = count == 1 && sets[0].actionSet == gameSet;
     fixture.levelsActive = count == 2 && sets[1].actionSet == levelsSet;
-    expect(count == 0 || (count == 1 && (fixture.menusActive || fixture.gameActive)) ||
+    expect((count == 1 && (fixture.menusActive || fixture.gameActive)) ||
            (fixture.menusActive && fixture.levelsActive));
     for (unsigned i = 0; i < count; ++i) expect(sets[i].subactionPath == XR_NULL_PATH);
-    ++fixture.actionSyncs;
     if (fixture.syncNotFocused) return XR_SESSION_NOT_FOCUSED;
     fixture.deployChanged = fixture.syncedDeploy != fixture.deployHeld;
     fixture.syncedDeploy = fixture.deployHeld;

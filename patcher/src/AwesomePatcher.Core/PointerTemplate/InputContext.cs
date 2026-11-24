@@ -1,7 +1,7 @@
 // Returned to the native plugin from both the camera and GameInput paths.
 internal static class InputContext
 {
-    internal const int Inactive = 0, Menus = 1, Levels = 2, Gameplay = 3;
+    internal const int Inactive = 0, Menus = 1, Levels = 2, Gameplay = 3, GameplayWithGlove = 4;
     internal static LoaderScene splash;
 
     internal static int Current()
@@ -26,7 +26,8 @@ internal static class InputContext
         }
 
         var input = GameInput.singleton;
-        return GameController.singleton != null && input != null && input.inputEnabled &&
-            !input.disabledInputAtStartOfLevel && Utilities.IsMidGame ? Gameplay : Inactive;
+        if (GameController.singleton == null || input == null || !input.inputEnabled ||
+            input.disabledInputAtStartOfLevel || !Utilities.IsMidGame) return Inactive;
+        return PlayerData.GloveEnabled ? GameplayWithGlove : Gameplay;
     }
 }
