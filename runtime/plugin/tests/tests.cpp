@@ -267,7 +267,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
 
     auto readPresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetGameplayPresses");
     auto presses = [&](int number) { return readPresses(number, context); };
-    constexpr int deployBit = 8;
+    constexpr int deployBit = 8, espressoBit = 16;
     const auto leftBeforeDeploy = state.handTicks[0], rightBeforeDeploy = state.handTicks[1];
     const auto beforeDeploy = state.actionSyncs;
     state.deploy[1].held = true;
@@ -332,6 +332,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.pointerSelect[0].held = state.pointerSelect[1].held = false;
     state.flipOff[0].held = false;
     frame(46);
+    state.espresso[0].held = true; // A gameplay binding held on the results menu.
     state.deploy[1].held = true;
     state.pointerSelect[1].held = true;
     check(presses(47) == 0, "menu inputs must not produce gameplay presses");
@@ -366,13 +367,15 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(state.actionSyncs == gallerySyncs && hand(0,tracked) == 0 && hand(1,tracked) == 0,
           "loading polled input or kept a gallery pointer");
     const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
-    context = InputContext::Gameplay | InputContext::GloveUnlocked | InputContext::SprayCanUnlocked;
+    context = InputContext::Gameplay | InputContext::GloveUnlocked | InputContext::SprayCanUnlocked | InputContext::CaffeineUnlocked;
     state.stickActive[1] = true;
     frame(54);
     check(state.gameActive && !state.menusActive && state.actionSyncs == gallerySyncs + 1, "gameplay did not resume with one sync");
     check(state.deploy[1].synced && state.deploy[1].changed, "fixture missed held deploy on the first gameplay sync");
     check(!(presses(54) & deployBit) && state.handTicks[1] == rightTicks, "held deploy fired or vibrated on gameplay entry");
     check(state.spray[0].synced && state.spray[0].changed, "fixture missed the held trigger on the first gameplay sync");
+    check(state.espresso[0].synced && state.espresso[0].changed, "fixture missed held espresso on the first gameplay sync");
+    check(!(presses(54) & espressoBit) && state.handTicks[0] == leftTicks, "menu-held espresso fired or vibrated on gameplay entry");
     int number = 54;
     auto checkSpray = [&](int expected, unsigned leftTickCount, const char* message) {
         check(presses(number) == expected && state.handTicks[0] == leftTickCount && state.handTicks[1] == rightTicks, message);
@@ -404,10 +407,13 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         };
         const auto glove = InputContext::Gameplay | InputContext::GloveUnlocked;
         const auto can = InputContext::Gameplay | InputContext::SprayCanUnlocked;
+        const auto caffeine = InputContext::Gameplay | InputContext::CaffeineUnlocked;
+        const auto allEquipment = can | InputContext::GloveUnlocked | InputContext::CaffeineUnlocked;
         context = InputContext::Gameplay;
         auto holdAll = [&](bool held) {
             for (int hand : {0, 1}) {
-                state.thumbsUp[hand].held = state.flipOff[hand].held = state.spray[hand].held = held;
+                state.thumbsUp[hand].held = state.flipOff[hand].held = held;
+                state.spray[hand].held = state.espresso[hand].held = held;
             }
         };
         holdAll(false);
@@ -416,14 +422,23 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         holdAll(true);
         state.deploy[1].held = true;
         sample(deployBit, 0, 1); // Locked equipment cannot silence a fresh deploy or tick the other hand.
-        context = can | InputContext::GloveUnlocked;
-        sample(0, 0, 0); // Held through both unlocks.
+        context = allEquipment;
+        sample(0, 0, 0); // Holding equipment buttons through unlock must not trigger them.
         holdAll(false);
         state.deploy[1].held = false;
         sample(0, 0, 0);
+        state.espresso[0].held = state.espresso[1].held = true;
+        sample(espressoBit, 1, 1); // Both hands press only espresso in this frame.
+        state.espresso[0].held = state.espresso[1].held = false;
         state.deploy[0].held = state.deploy[1].held = true;
         sample(deployBit, 1, 1); // Only deploy is pressed: one request and one tick on each hand.
+        context = caffeine;
+        state.espresso[0].held = true;
+        sample(espressoBit, 1, 0);
+        state.espresso[1].held = true;
+        sample(espressoBit, 0, 1); // Rebound right hand while the default left button stays held.
         context = can;
+        check(presses(number) == 0, "relocked caffeine retained an espresso press");
         state.spray[0].held = state.thumbsUp[0].held = true;
         sample(4, 1, 0); // Left spray with glove locked.
         state.spray[1].held = true;
@@ -436,13 +451,13 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         holdAll(false);
         state.deploy[0].held = state.deploy[1].held = false;
         sample(0, 0, 0);
-        context = can | InputContext::GloveUnlocked;
+        context = allEquipment;
         holdAll(true);
         state.deploy[0].held = state.deploy[1].held = true;
         state.sticks[0] = {.75f, 0};
-        sample(7 | deployBit, 1, 1); // Both hands deploy; all eligible presses share one tick per hand.
-        context = cameraFirst ? glove : can;
-        check(presses(number) == ((cameraFirst ? 3 : 4) | deployBit),
+        sample(7 | deployBit | espressoBit, 1, 1); // Both hands deploy; all eligible presses share one tick per hand.
+        context = (cameraFirst ? glove : can) | InputContext::CaffeineUnlocked;
+        check(presses(number) == ((cameraFirst ? 3 : 4) | deployBit | espressoBit),
               "relocking one item discarded another item's press");
         context = InputContext::Gameplay;
         check(presses(number) == deployBit, "relocking equipment must preserve only the deployment press");

@@ -9,7 +9,6 @@ namespace AwesomePatcher.Core
         internal static void Apply(ModuleDefinition game, ModuleReference plugin, MethodDefinition inputContext)
         {
             var input = game.GetType("GameInput");
-            var legacy = input.Methods.Single(m => m.Name == "get_Parachute");
             var owner = input.Fields.Single(f => f.Name == "singleton");
             var alive = game.GetMemberReferences().OfType<MethodReference>().Single(m =>
                 m.FullName == "System.Boolean UnityEngine.Object::op_Implicit(UnityEngine.Object)");
@@ -73,24 +72,30 @@ namespace AwesomePatcher.Core
             AddGameplayPress("FlipOff", 2);
             AddGameplayPress("Graffiti", 4);
 
-            const string name = "DeployParachutePressed";
-            var getter = new MethodDefinition("get_" + name, MethodAttributes.Public | MethodAttributes.Static |
-                MethodAttributes.HideBySig | MethodAttributes.SpecialName, game.TypeSystem.Boolean);
-            input.Methods.Add(getter);
-            input.Properties.Add(new PropertyDefinition(name, PropertyAttributes.None, game.TypeSystem.Boolean) { GetMethod = getter });
-            var get = getter.Body.GetILProcessor();
-            var readPhysical = get.Create(OpCodes.Call, legacy);
-            get.Emit(OpCodes.Ldsfld, owner);
-            get.Emit(OpCodes.Call, alive);
-            get.Emit(OpCodes.Brtrue, readPhysical);
-            get.Emit(OpCodes.Ldc_I4_0);
-            get.Emit(OpCodes.Ret);
-            get.Append(readPhysical);
-            get.Emit(OpCodes.Ret);
-            AddGameplayPress(name, 8);
+            // These retail buttons also serve results shortcuts. Merge XR only for their gameplay callers.
+            void AddGameplayOnlyGetter(string physicalProperty, string name, int mask, string consumer)
+            {
+                var legacy = input.Properties.Single(p => p.Name == physicalProperty).GetMethod;
+                var getter = new MethodDefinition("get_" + name, MethodAttributes.Public | MethodAttributes.Static |
+                    MethodAttributes.HideBySig | MethodAttributes.SpecialName, game.TypeSystem.Boolean);
+                input.Methods.Add(getter);
+                input.Properties.Add(new PropertyDefinition(name, PropertyAttributes.None, game.TypeSystem.Boolean) { GetMethod = getter });
+                var get = getter.Body.GetILProcessor();
+                var readPhysical = get.Create(OpCodes.Call, legacy);
+                get.Emit(OpCodes.Ldsfld, owner);
+                get.Emit(OpCodes.Call, alive);
+                get.Emit(OpCodes.Brtrue, readPhysical);
+                get.Emit(OpCodes.Ldc_I4_0);
+                get.Emit(OpCodes.Ret);
+                get.Append(readPhysical);
+                get.Emit(OpCodes.Ret);
+                AddGameplayPress(name, mask);
 
-            var update = game.GetType("Parachute").Methods.Single(m => m.Name == "Update");
-            update.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand == legacy).Operand = getter;
+                var update = game.GetType(consumer).Methods.Single(m => m.Name == "Update");
+                update.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand == legacy).Operand = getter;
+            }
+            AddGameplayOnlyGetter("Parachute", "DeployParachutePressed", 8, "Parachute");
+            AddGameplayOnlyGetter("Espresso", "UseEspressoPressed", 16, "Player");
         }
     }
 }

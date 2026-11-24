@@ -10,7 +10,7 @@ class GUIController { public static GUIController instance; public bool InputEna
 class LoaderScene { public bool loading, hasAnimationBegun; }
 class GameInput { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController { public static GameController singleton; }
-static class PlayerData { public static bool GloveEnabled, SprayCanEnabled; }
+static class PlayerData { public static bool GloveEnabled, SprayCanEnabled, CaffeineEnabled; }
 static class Utilities { public static bool IsMidGame; }
 
 namespace AwesomePatcher.IntegrationTests
@@ -63,15 +63,20 @@ namespace AwesomePatcher.IntegrationTests
             input.inputEnabled = false;
             Expect(InputContext.Inactive, "game input lock");
             input.inputEnabled = true;
-            Expect(InputContext.Gameplay, "live play with locked glove");
+            Expect(InputContext.Gameplay, "live play with locked equipment");
+            PlayerData.CaffeineEnabled = true;
+            Expect(InputContext.Gameplay | InputContext.CaffeineUnlocked, "caffeine only");
+            PlayerData.CaffeineEnabled = false;
             PlayerData.GloveEnabled = true;
             Expect(InputContext.Gameplay | InputContext.GloveUnlocked, "live play with glove only");
             PlayerData.SprayCanEnabled = true;
             Expect(InputContext.Gameplay | InputContext.GloveUnlocked | InputContext.SprayCanUnlocked, "both items");
             PlayerData.GloveEnabled = false;
             Expect(InputContext.Gameplay | InputContext.SprayCanUnlocked, "spray can only");
+            PlayerData.CaffeineEnabled = true;
+            Expect(InputContext.Gameplay | InputContext.SprayCanUnlocked | InputContext.CaffeineUnlocked, "spray can and caffeine");
             gui.currentScreen = new GameScreen();
-            Expect(InputContext.Menus, "pause with unlocked spray can");
+            Expect(InputContext.Menus, "pause or results with unlocked equipment");
             gui.currentScreen = null;
             Utilities.IsMidGame = false;
             Expect(InputContext.Inactive, "replay or scene transition");
@@ -79,7 +84,7 @@ namespace AwesomePatcher.IntegrationTests
             GameController.singleton = null;
             GUIController.instance = null;
             Expect(InputContext.Inactive, "startup without controllers");
-            PlayerData.SprayCanEnabled = false;
+            PlayerData.SprayCanEnabled = PlayerData.CaffeineEnabled = false;
         }
     }
 }

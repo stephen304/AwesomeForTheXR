@@ -61,9 +61,9 @@ private:
     int inputFrame = -1;
     bool actionsActive = false;
     XrAction aim = XR_NULL_HANDLE, pointerSelect = XR_NULL_HANDLE, pointerHaptic = XR_NULL_HANDLE;
-    XrAction deploy = XR_NULL_HANDLE;
+    XrAction deploy = XR_NULL_HANDLE, espresso = XR_NULL_HANDLE;
     XrAction thumbsUp = XR_NULL_HANDLE, flipOff = XR_NULL_HANDLE, spray = XR_NULL_HANDLE, pressHaptic = XR_NULL_HANDLE;
-    std::array<bool, 2> selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{};
+    std::array<bool, 2> selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{}, espressoReleased{};
     int gameplayPresses = 0;
     XrActionStateBoolean readButton(XrAction action, XrPath hand);
     void interruptButtonPresses();

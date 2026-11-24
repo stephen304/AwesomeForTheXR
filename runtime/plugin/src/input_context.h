@@ -1,7 +1,7 @@
 #pragma once
 
 // Values returned by the injected InputContext.Current method.
-enum class InputContext : int { Inactive, Menus, Levels, MenuAimOnly, Gameplay = 4, GloveUnlocked = 8, SprayCanUnlocked = 16 };
+enum class InputContext : int { Inactive, Menus, Levels, MenuAimOnly, Gameplay = 4, GloveUnlocked = 8, SprayCanUnlocked = 16, CaffeineUnlocked = 32 };
 
 constexpr InputContext operator|(InputContext a, InputContext b) {
     return static_cast<InputContext>(static_cast<int>(a) | static_cast<int>(b));

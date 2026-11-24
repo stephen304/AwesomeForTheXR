@@ -43,7 +43,7 @@ const XrActionSet gameSet = (XrActionSet)17, levelsSet = (XrActionSet)26;
 const XrAction navigate = (XrAction)27, pointerHaptic = (XrAction)28;
 const XrAction aim = (XrAction)15, selectButton = (XrAction)16, move = (XrAction)18, turn = (XrAction)19;
 const XrAction deploy = (XrAction)20, thumbsUp = (XrAction)21, flipOff = (XrAction)22, pressHaptic = (XrAction)25;
-const XrAction spray = (XrAction)29;
+const XrAction spray = (XrAction)29, espresso = (XrAction)30;
 const char* const users[] = {"/user/hand/left", "/user/hand/right"};
 const XrPath handPaths[] = {1, 2};
 std::map<std::string, XrPath> paths{{users[0], handPaths[0]}, {users[1], handPaths[1]}};
@@ -95,7 +95,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCre
         return XR_SUCCESS;
     }
     const std::pair<const char*, XrAction> gameButtons[] = {
-        {"deploy_parachute", deploy}, {"thumbs_up", thumbsUp}, {"flip_off", flipOff}, {"spray_graffiti", spray}
+        {"deploy_parachute", deploy}, {"thumbs_up", thumbsUp}, {"flip_off", flipOff}, {"spray_graffiti", spray}, {"use_espresso", espresso}
     };
     for (const auto& button : gameButtons) {
         if (strcmp(info->actionName, button.first)) continue;
@@ -128,7 +128,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
         const bool hasA = profile.first == "valve/index_controller" || profile.first == "oculus/touch_controller";
         const bool index = profile.first == "valve/index_controller";
         const bool touch = profile.first == "oculus/touch_controller";
-        expect(info->next == nullptr && info->countSuggestedBindings == (simple ? 10u : index ? 18u : touch ? 16u : 17u));
+        expect(info->next == nullptr && info->countSuggestedBindings == (simple ? 10u : index ? 19u : 17u));
         auto has = [&](XrAction action, XrPath path) {
             return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
                 return b.action == action && b.binding == path;
@@ -136,6 +136,8 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, c
         };
         const auto rightA = pathId("/user/hand/right/input/a/click");
         expect(has(deploy, rightA) == hasA);
+        expect(has(espresso, pathId("/user/hand/left/input/a/click")) == index);
+        expect(has(espresso, pathId("/user/hand/left/input/x/click")) == touch);
         expect(!has(deploy, pathId("/user/hand/left/input/a/click")));
         expect(!has(deploy, pathId("/user/hand/left/input/x/click")));
         for (int i = 0; i < 2; ++i) {
@@ -183,7 +185,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInf
            (fixture.menusActive && fixture.levelsActive));
     for (unsigned i = 0; i < count; ++i) expect(sets[i].subactionPath == XR_NULL_PATH);
     if (fixture.syncNotFocused) return XR_SESSION_NOT_FOCUSED;
-    for (auto* buttons : {fixture.pointerSelect, fixture.deploy, fixture.thumbsUp, fixture.flipOff, fixture.spray}) {
+    for (auto* buttons : {fixture.pointerSelect, fixture.deploy, fixture.thumbsUp, fixture.flipOff, fixture.spray, fixture.espresso}) {
         // An inactive set does not sample presses made while another set is active.
         const bool setActive = buttons == fixture.pointerSelect ? fixture.menusActive : fixture.gameActive;
         if (!setActive) continue;
@@ -225,12 +227,13 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateVector2f(XrSession s, const XrAct
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrActionStateGetInfo* get, XrActionStateBoolean* state) {
     expect(get->action == selectButton ? currentFixture().menusActive : currentFixture().gameActive);
     expect(state->type == XR_TYPE_ACTION_STATE_BOOLEAN && (get->action == selectButton ||
-           get->action == deploy || get->action == thumbsUp || get->action == flipOff || get->action == spray));
+           get->action == deploy || get->action == thumbsUp || get->action == flipOff || get->action == spray || get->action == espresso));
     const auto& fixture = currentFixture();
     const auto* buttons = get->action == selectButton ? fixture.pointerSelect :
                           get->action == deploy ? fixture.deploy :
                           get->action == thumbsUp ? fixture.thumbsUp :
-                          get->action == flipOff ? fixture.flipOff : fixture.spray;
+                          get->action == flipOff ? fixture.flipOff :
+                          get->action == spray ? fixture.spray : fixture.espresso;
     const auto& button = buttons[handIndex(get->subactionPath)];
     state->isActive = button.active;
     state->currentState = button.active && button.synced;

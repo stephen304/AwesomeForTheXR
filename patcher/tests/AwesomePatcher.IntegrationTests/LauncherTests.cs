@@ -145,20 +145,25 @@ namespace AwesomePatcher.IntegrationTests
         private static void CheckButtonBindings(ModuleDefinition module)
         {
             var input = module.GetType("GameInput");
-            var legacy = input.Properties.Single(p => p.Name == "Parachute").GetMethod;
-            var getter = input.Properties.Single(p => p.Name == "DeployParachutePressed").GetMethod;
-            var deploy = module.GetType("Parachute").Methods.Single(m => m.Name == "Update");
-            var callers = module.GetTypes().SelectMany(t => t.Methods).Where(m => m.HasBody &&
-                m.Body.Instructions.Any(i => i.Operand == getter));
-            if (!callers.SequenceEqual(new[] { deploy }) || deploy.Body.Instructions.Any(i => i.Operand == legacy))
-                throw new InvalidOperationException("Only Parachute.Update should use the combined deployment input.");
-            var title = module.GetType("MainScreen").Methods.Single(m => m.Name == "Update");
-            if (title.Body.Instructions.Count(i => i.Operand == legacy) != 1)
-                throw new InvalidOperationException("The arcade title must use the original physical parachute shortcut.");
-            var physical = getter.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand == legacy);
             var pressField = input.Fields.Single(f => f.Name == "aftxrGameplayPresses");
-            if (physical.Next.Next.Operand != pressField || legacy.Body.Instructions.Any(i => i.Operand == pressField))
-                throw new InvalidOperationException("Only the deployment getter should merge the physical parachute with XR.");
+            foreach (var (physicalName, combinedName, consumer) in new[] {
+                ("Parachute", "DeployParachutePressed", "Parachute"), ("Espresso", "UseEspressoPressed", "Player") })
+            {
+                var legacy = input.Properties.Single(p => p.Name == physicalName).GetMethod;
+                var getter = input.Properties.Single(p => p.Name == combinedName).GetMethod;
+                var update = module.GetType(consumer).Methods.Single(m => m.Name == "Update");
+                var callers = module.GetTypes().SelectMany(t => t.Methods).Where(m => m.HasBody &&
+                    m.Body.Instructions.Any(i => i.Operand == getter));
+                if (!callers.SequenceEqual(new[] { update }) || update.Body.Instructions.Any(i => i.Operand == legacy))
+                    throw new InvalidOperationException("Only " + consumer + ".Update should read " + combinedName + ".");
+                var physical = getter.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand == legacy);
+                if (physical.Next.Next.Operand != pressField || legacy.Body.Instructions.Any(i => i.Operand == pressField))
+                    throw new InvalidOperationException("Only " + combinedName + " should merge " + physicalName + " with XR.");
+            }
+            var title = module.GetType("MainScreen").Methods.Single(m => m.Name == "Update");
+            var parachute = input.Properties.Single(p => p.Name == "Parachute").GetMethod;
+            if (title.Body.Instructions.Count(i => i.Operand == parachute) != 1)
+                throw new InvalidOperationException("The arcade title must use the original physical parachute shortcut.");
             var gather = input.Methods.Single(m => m.Name == "GatherPCInput").Body.Instructions;
             var sample = gather.Single(i => i.Operand is MethodReference m && m.Name == "AFTXR_GetGameplayPresses");
             var guard = sample.Previous.Previous.Previous.Previous;
@@ -171,7 +176,7 @@ namespace AwesomePatcher.IntegrationTests
                 if (clear.OpCode != OpCodes.Stfld || clear.Previous.OpCode != OpCodes.Ldc_I4_0)
                     throw new InvalidOperationException("XR gameplay presses survived " + method);
             }
-            foreach (var binding in new[] { ("ThumbsUp", 1), ("FlipOff", 2), ("Graffiti", 4), ("DeployParachutePressed", 8) })
+            foreach (var binding in new[] { ("ThumbsUp", 1), ("FlipOff", 2), ("Graffiti", 4), ("DeployParachutePressed", 8), ("UseEspressoPressed", 16) })
             {
                 var body = input.Properties.Single(p => p.Name == binding.Item1).GetMethod.Body.Instructions;
                 var mask = body.Single(i => i.Operand == pressField).Next;

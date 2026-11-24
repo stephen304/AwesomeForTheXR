@@ -18,11 +18,12 @@ constexpr auto stereo = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
 constexpr auto validPose = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
 
 // Press bits shared with the injected GameInput getters.
-enum GameplayPress { ThumbsUpPress = 1, FlipOffPress = 2, SprayPress = 4, DeployPress = 8 };
+enum GameplayPress { ThumbsUpPress = 1, FlipOffPress = 2, SprayPress = 4, DeployPress = 8, EspressoPress = 16 };
 
 int enabledGameplayPresses(InputContext context) {
     return DeployPress | (hasFlag(context, InputContext::GloveUnlocked) ? ThumbsUpPress | FlipOffPress : 0) |
-           (hasFlag(context, InputContext::SprayCanUnlocked) ? SprayPress : 0);
+           (hasFlag(context, InputContext::SprayCanUnlocked) ? SprayPress : 0) |
+           (hasFlag(context, InputContext::CaffeineUnlocked) ? EspressoPress : 0);
 }
 
 void requireXR(const char* operation, XrResult result) {
@@ -159,12 +160,17 @@ void StereoSession::openInput() {
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "thumbs_up", "Thumbs up", thumbsUp, true);
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "flip_off", "Flip off", flipOff, true);
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "spray_graffiti", "Spray graffiti", spray, true);
+    action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "use_espresso", "Use espresso", espresso, true);
     action(gameSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "gesture_haptic", "Gameplay press feedback", pressHaptic, true);
-    struct Profile { const char *name, *button, *stick, *padPress, *gripPress; bool hasRightA = false; };
+    struct Profile {
+        const char *name, *button, *stick, *padPress, *gripPress;
+        bool hasRightA = false;
+        const char* espressoPath = nullptr;
+    };
     for (const Profile profile : {
         Profile{"khr/simple_controller", "select/click", nullptr, nullptr, nullptr},
-        {"oculus/touch_controller", "trigger/value", "thumbstick", nullptr, "squeeze/value", true},
-        {"valve/index_controller", "trigger/value", "thumbstick", "trackpad/force", "squeeze/force", true},
+        {"oculus/touch_controller", "trigger/value", "thumbstick", nullptr, "squeeze/value", true, "/user/hand/left/input/x/click"},
+        {"valve/index_controller", "trigger/value", "thumbstick", "trackpad/force", "squeeze/force", true, "/user/hand/left/input/a/click"},
         {"htc/vive_controller", "trigger/click", "trackpad", "trackpad/click", "squeeze/click"},
         {"microsoft/motion_controller", "trigger/value", "thumbstick", "trackpad/click", "squeeze/click"}}) {
         std::vector<XrActionSuggestedBinding> bindings;
@@ -187,6 +193,7 @@ void StereoSession::openInput() {
         if (profile.hasRightA) {
             bindings.push_back({deploy, path("/user/hand/right/input/a/click")});
         }
+        if (profile.espressoPath) bindings.push_back({espresso, path(profile.espressoPath)});
         XrInteractionProfileSuggestedBinding info{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         info.interactionProfile = path(std::string("/interaction_profiles/") + profile.name);
         info.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
@@ -279,6 +286,7 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
             if (freshPress(readButton(thumbsUp, hand), thumbsUpReleased[i])) presses |= ThumbsUpPress;
             if (freshPress(readButton(flipOff, hand), flipOffReleased[i])) presses |= FlipOffPress;
             if (freshPress(readButton(spray, hand), sprayReleased[i])) presses |= SprayPress;
+            if (freshPress(readButton(espresso, hand), espressoReleased[i])) presses |= EspressoPress;
             presses &= enabled;
             gameplayPresses |= presses;
             if (presses) tickHand(pressHaptic, hand);
@@ -323,6 +331,7 @@ void StereoSession::interruptButtonPresses() {
     thumbsUpReleased.fill(false);
     flipOffReleased.fill(false);
     sprayReleased.fill(false);
+    espressoReleased.fill(false);
     gameplayPresses = 0;
 }
 

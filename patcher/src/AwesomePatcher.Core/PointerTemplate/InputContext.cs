@@ -2,7 +2,7 @@
 internal static class InputContext
 {
     internal const int Inactive = 0, Menus = 1, Levels = 2, MenuAimOnly = 3, Gameplay = 4;
-    internal const int GloveUnlocked = 8, SprayCanUnlocked = 16;
+    internal const int GloveUnlocked = 8, SprayCanUnlocked = 16, CaffeineUnlocked = 32;
     internal static LoaderScene splash;
 
     internal static int Current()
@@ -31,6 +31,6 @@ internal static class InputContext
         if (GameController.singleton == null || input == null || !input.inputEnabled ||
             input.disabledInputAtStartOfLevel || !Utilities.IsMidGame) return Inactive;
         return Gameplay | (PlayerData.GloveEnabled ? GloveUnlocked : 0) |
-            (PlayerData.SprayCanEnabled ? SprayCanUnlocked : 0);
+            (PlayerData.SprayCanEnabled ? SprayCanUnlocked : 0) | (PlayerData.CaffeineEnabled ? CaffeineUnlocked : 0);
     }
 }
