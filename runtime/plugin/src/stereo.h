@@ -29,7 +29,7 @@ public:
     static constexpr int headAnchor = -1;
     void pose(int anchor, float* pose) const;
     int pointer(int hand, float* pose, uint32_t& generation) const;
-    int getGameplayPresses(int unityFrame, InputContext context);
+    int getButtonPresses(int unityFrame, InputContext context);
     bool mergeSticks(int unityFrame, InputContext context, XrVector2f& movement, XrVector2f& look);
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
     void recenter() { recenterPending = true; }
@@ -55,17 +55,19 @@ private:
     XrSession session = XR_NULL_HANDLE;
     XrSpace localSpace = XR_NULL_HANDLE, viewSpace = XR_NULL_HANDLE;
     InputContext inputContext = InputContext::Inactive;
-    XrActionSet menuSet = XR_NULL_HANDLE, levelsSet = XR_NULL_HANDLE, gameSet = XR_NULL_HANDLE;
+    XrActionSet globalSet = XR_NULL_HANDLE, menuSet = XR_NULL_HANDLE, levelsSet = XR_NULL_HANDLE, gameSet = XR_NULL_HANDLE;
     XrAction move = XR_NULL_HANDLE, turn = XR_NULL_HANDLE, navigate = XR_NULL_HANDLE;
     XrVector2f movementStick{}, turnStick{};
     int inputFrame = -1;
     bool actionsActive = false;
     XrAction aim = XR_NULL_HANDLE, pointerSelect = XR_NULL_HANDLE, pointerHaptic = XR_NULL_HANDLE;
+    XrAction escape = XR_NULL_HANDLE, escapeHaptic = XR_NULL_HANDLE;
     XrAction deploy = XR_NULL_HANDLE, espresso = XR_NULL_HANDLE;
     XrAction thumbsUp = XR_NULL_HANDLE, flipOff = XR_NULL_HANDLE, spray = XR_NULL_HANDLE, pressHaptic = XR_NULL_HANDLE;
-    std::array<bool, 2> selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{}, espressoReleased{};
-    int gameplayPresses = 0;
+    std::array<bool, 2> escapeReleased{}, selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{}, espressoReleased{};
+    int buttonPresses = 0;
     XrActionStateBoolean readButton(XrAction action, XrPath hand);
+    void interruptLocalPresses();
     void interruptButtonPresses();
     void tickHand(XrAction output, XrPath hand);
     struct Hand {

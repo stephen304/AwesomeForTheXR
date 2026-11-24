@@ -1,15 +1,17 @@
 // Returned to the native plugin from both the camera and GameInput paths.
 internal static class InputContext
 {
-    internal const int Inactive = 0, Menus = 1, Levels = 2, MenuAimOnly = 3, Gameplay = 4;
+    internal const int Inactive = 0, Menus = 1, Levels = 2, MenuAimOnly = 3, Gameplay = 4, PointerOnly = 5, Replay = 6;
     internal const int GloveUnlocked = 8, SprayCanUnlocked = 16, CaffeineUnlocked = 32;
     internal static LoaderScene splash;
 
     internal static int Current()
     {
         if (splash != null)
-            return splash.hasAnimationBegun && !splash.loading ? Menus : Inactive;
+            return splash.hasAnimationBegun && !splash.loading ? PointerOnly : Inactive;
 
+        var input = GameInput.singleton;
+        bool acceptsInput = input != null && input.inputEnabled && !input.disabledInputAtStartOfLevel;
         var gui = GUIController.instance;
         var screen = gui != null ? gui.currentScreen : null;
         if (screen != null)
@@ -17,19 +19,20 @@ internal static class InputContext
             if (screen is LoadingScreen) return Inactive;
             if (!gui.InputEnabled) return MenuAimOnly;
             var levels = screen as LevelSelectScreen;
-            if (levels != null) return levels.inputEnabled ? Levels : MenuAimOnly;
+            if (levels != null && !levels.inputEnabled) return MenuAimOnly;
             var setup = screen as SetupScreen;
             if (setup != null && !setup.inputEnabled) return MenuAimOnly;
             var graphics = screen as GraphicsScreen;
             if (graphics != null && !graphics.inputEnabled) return MenuAimOnly;
             var choice = screen as ChoiceScreen;
             if (choice != null && !choice.inputEnabled) return MenuAimOnly;
-            return Menus;
+            if (!acceptsInput || screen is MainScreen || screen is GameOverScreen) return PointerOnly;
+            return levels != null ? Levels : Menus;
         }
 
-        var input = GameInput.singleton;
-        if (GameController.singleton == null || input == null || !input.inputEnabled ||
-            input.disabledInputAtStartOfLevel || !Utilities.IsMidGame) return Inactive;
+        if (!acceptsInput) return Inactive;
+        if (Utilities.IsReplayLevel) return Replay;
+        if (GameController.singleton == null || !Utilities.IsMidGame) return Inactive;
         return Gameplay | (PlayerData.GloveEnabled ? GloveUnlocked : 0) |
             (PlayerData.SprayCanEnabled ? SprayCanUnlocked : 0) | (PlayerData.CaffeineEnabled ? CaffeineUnlocked : 0);
     }

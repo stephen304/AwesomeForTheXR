@@ -160,7 +160,7 @@ internal static partial class MenuPointer
         uint leftGeneration, rightGeneration;
         int l = AFTXR_PointerHand(0, out left, out leftGeneration);
         int r = AFTXR_PointerHand(1, out right, out rightGeneration);
-        bool allowActions = context == InputContext.Menus || context == InputContext.Levels;
+        bool allowActions = context == InputContext.Menus || context == InputContext.Levels || context == InputContext.PointerOnly;
         int state = SelectHand(l, r, leftGeneration, rightGeneration, allowActions);
         Cursor cursor = Cursor.singleton;
         Vector3 start = new Vector3(), end = new Vector3();

@@ -10,7 +10,7 @@ EXPORTS
     AFTXR_BeginCameraFrame
     AFTXR_PointerHand
     AFTXR_MergeGamepadSticks
-    AFTXR_GetGameplayPresses
+    AFTXR_GetButtonPresses
     AFTXR_EyePose
     AFTXR_EyeProjection
     AFTXR_EyeDescription

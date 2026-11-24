@@ -265,9 +265,9 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.sticks[0] = {};
     checkSticks(25, {.49f, -.5f}, {}, {.49f, -.5f}, state.sticks[1], false);
 
-    auto readPresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetGameplayPresses");
+    auto readPresses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetButtonPresses");
     auto presses = [&](int number) { return readPresses(number, context); };
-    constexpr int deployBit = 8, espressoBit = 16;
+    constexpr int deployBit = 8, espressoBit = 16, escapeBit = 32;
     const auto leftBeforeDeploy = state.handTicks[0], rightBeforeDeploy = state.handTicks[1];
     const auto beforeDeploy = state.actionSyncs;
     state.deploy[1].held = true;
@@ -291,10 +291,10 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     check(presses(31) == 0, "release after reconnect");
     state.nextEvent = XR_SESSION_STATE_VISIBLE;
     state.followingEvent = XR_SESSION_STATE_FOCUSED;
-    state.deploy[1].held = true;
+    state.deploy[1].held = state.escape[1].held = true;
     frame(32);
     check(presses(32) == 0, "held across dashboard");
-    state.deploy[1].held = false;
+    state.deploy[1].held = state.escape[1].held = false;
     check(presses(33) == 0, "release after dashboard");
     state.deploy[1].held = true;
     check(presses(35) == 0, "press leaked across an unsampled frame");
@@ -393,7 +393,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
 
     // Both consumers can synchronize first. Each press must produce the same result in either order.
     for (bool cameraFirst : {false, true}) {
-        auto sample = [&](int expectedPresses, unsigned left, unsigned right) {
+        auto sample = [&](int expectedPresses, XrAction left, XrAction right) {
             ++number;
             const auto syncsBefore = state.actionSyncs;
             const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
@@ -402,8 +402,10 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
             if (!cameraFirst) frame(number);
             check(presses(number) == expectedPresses && state.actionSyncs == syncsBefore + 1,
                   "camera and GameInput did not share one gameplay button sample");
-            check(state.handTicks[0] == leftTicks + left && state.handTicks[1] == rightTicks + right,
-                  "wrong haptic count for equipment state or call order");
+            check(state.handTicks[0] == leftTicks + (left != XR_NULL_HANDLE) &&
+                  state.handTicks[1] == rightTicks + (right != XR_NULL_HANDLE), "wrong number of haptic ticks");
+            check(!left || state.lastHaptic[0] == left, "wrong left-hand haptic output");
+            check(!right || state.lastHaptic[1] == right, "wrong right-hand haptic output");
         };
         const auto glove = InputContext::Gameplay | InputContext::GloveUnlocked;
         const auto can = InputContext::Gameplay | InputContext::SprayCanUnlocked;
@@ -421,33 +423,33 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         sample(0, 0, 0);
         holdAll(true);
         state.deploy[1].held = true;
-        sample(deployBit, 0, 1); // Locked equipment cannot silence a fresh deploy or tick the other hand.
+        sample(deployBit, 0, haptics::gameplay); // Locked equipment cannot silence a fresh deploy or tick the other hand.
         context = allEquipment;
         sample(0, 0, 0); // Holding equipment buttons through unlock must not trigger them.
         holdAll(false);
         state.deploy[1].held = false;
         sample(0, 0, 0);
         state.espresso[0].held = state.espresso[1].held = true;
-        sample(espressoBit, 1, 1); // Both hands press only espresso in this frame.
+        sample(espressoBit, haptics::gameplay, haptics::gameplay); // Both hands press only espresso in this frame.
         state.espresso[0].held = state.espresso[1].held = false;
         state.deploy[0].held = state.deploy[1].held = true;
-        sample(deployBit, 1, 1); // Only deploy is pressed: one request and one tick on each hand.
+        sample(deployBit, haptics::gameplay, haptics::gameplay); // Only deploy is pressed: one request and one tick on each hand.
         context = caffeine;
         state.espresso[0].held = true;
-        sample(espressoBit, 1, 0);
+        sample(espressoBit, haptics::gameplay, 0);
         state.espresso[1].held = true;
-        sample(espressoBit, 0, 1); // Rebound right hand while the default left button stays held.
+        sample(espressoBit, 0, haptics::gameplay); // Rebound right hand while the default left button stays held.
         context = can;
         check(presses(number) == 0, "relocked caffeine retained an espresso press");
         state.spray[0].held = state.thumbsUp[0].held = true;
-        sample(4, 1, 0); // Left spray with glove locked.
+        sample(4, haptics::gameplay, 0); // Left spray with glove locked.
         state.spray[1].held = true;
-        sample(4, 0, 1); // Right spray while left remains held.
+        sample(4, 0, haptics::gameplay); // Right spray while left remains held.
         context = glove;
         holdAll(false);
         sample(0, 0, 0);
         state.spray[0].held = state.flipOff[1].held = true;
-        sample(2, 0, 1); // Left spray stays silent with only the glove unlocked.
+        sample(2, 0, haptics::gameplay); // Left spray stays silent with only the glove unlocked.
         holdAll(false);
         state.deploy[0].held = state.deploy[1].held = false;
         sample(0, 0, 0);
@@ -455,13 +457,58 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         holdAll(true);
         state.deploy[0].held = state.deploy[1].held = true;
         state.sticks[0] = {.75f, 0};
-        sample(7 | deployBit | espressoBit, 1, 1); // Both hands deploy; all eligible presses share one tick per hand.
+        sample(7 | deployBit | espressoBit, haptics::gameplay, haptics::gameplay); // Both hands deploy; all eligible presses share one tick per hand.
         context = (cameraFirst ? glove : can) | InputContext::CaffeineUnlocked;
         check(presses(number) == ((cameraFirst ? 3 : 4) | deployBit | espressoBit),
               "relocking one item discarded another item's press");
         context = InputContext::Gameplay;
         check(presses(number) == deployBit, "relocking equipment must preserve only the deployment press");
         checkSticks(number, {}, {}, state.sticks[0], state.sticks[1], true);
+
+        // Escape keeps its release history between play and pause and ticks only once per hand.
+        holdAll(false);
+        state.deploy[0].held = state.deploy[1].held = false;
+        sample(0, 0, 0);
+        state.escape[1].held = state.deploy[1].held = true;
+        sample(escapeBit | deployBit, 0, haptics::escape);
+        context = InputContext::Menus;
+        check(presses(number) == 0, "opening pause retained the press in the new context");
+        state.pointerSelect[0].held = state.pointerSelect[1].held = false;
+        sample(0, 0, 0); // Holding B cannot resume.
+        state.escape[1].held = false;
+        sample(0, 0, 0);
+        state.escape[1].held = true;
+        state.pointerSelect[0].held = state.pointerSelect[1].held = true;
+        sample(escapeBit, haptics::pointer, haptics::escape); // Right B resumes; a simultaneous right trigger shares its tick.
+        state.pointerSelect[0].held = state.pointerSelect[1].held = false;
+        context = InputContext::Gameplay;
+        state.escape[0].held = true;
+        sample(escapeBit, haptics::escape, 0); // Rebound left hand can press on the first play frame while right stays held.
+        state.escape[0].held = state.escape[1].held = false;
+        sample(0, 0, 0);
+
+        context = InputContext::Levels;
+        state.escape[1].held = true;
+        sample(escapeBit, 0, haptics::escape);
+        check(state.globalActive && state.menusActive && state.levelsActive, "gallery action sets");
+        context = InputContext::MenuAimOnly;
+        check(presses(number) == 0, "menu lock retained a cached Escape");
+        state.escape[1].held = false;
+        sample(0, 0, 0);
+        state.escape[0].held = true;
+        sample(0, 0, 0);
+        context = InputContext::Replay;
+        sample(0, 0, 0); // A press during the lock cannot exit a replay on entry.
+        check(state.globalActive && !state.menusActive && !state.gameActive && !state.levelsActive, "replay action sets");
+        state.escape[0].held = false;
+        sample(0, 0, 0);
+        state.escape[0].held = true;
+        sample(escapeBit, haptics::escape, 0);
+        context = InputContext::PointerOnly;
+        state.escape[1].held = true;
+        sample(0, 0, 0);
+        check(!state.globalActive && state.menusActive, "splash, title and VR results must be pointer-only");
+        state.escape[0].held = state.escape[1].held = false;
     }
 
     context = InputContext::Levels;
@@ -538,7 +585,7 @@ void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseS
         for (int i = 0; i < 2; ++i) checkEyePixels(device, state.eyeImages[i], colors[i]);
     };
 
-    auto presses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetGameplayPresses");
+    auto presses = entry<int (__cdecl*)(int, InputContext)>(plugin, "AFTXR_GetButtonPresses");
     context = InputContext::Inactive;
     state.followingEvent = XR_SESSION_STATE_FOCUSED;
     stereoFrame(1); // The headset gains focus before the splash accepts input.

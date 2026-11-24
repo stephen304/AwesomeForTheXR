@@ -2,6 +2,9 @@ using System;
 
 class GameScreen { }
 class LoadingScreen : GameScreen { }
+class MainScreen : GameScreen { }
+class GameOverScreen : GameScreen { }
+class GamePauseScreen : GameScreen { }
 class LevelSelectScreen : GameScreen { public bool inputEnabled; }
 class SetupScreen : GameScreen { public bool inputEnabled; }
 class GraphicsScreen : GameScreen { public bool inputEnabled; }
@@ -11,7 +14,7 @@ class LoaderScene { public bool loading, hasAnimationBegun; }
 class GameInput { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController { public static GameController singleton; }
 static class PlayerData { public static bool GloveEnabled, SprayCanEnabled, CaffeineEnabled; }
-static class Utilities { public static bool IsMidGame; }
+static class Utilities { public static bool IsMidGame, IsReplayLevel; }
 
 namespace AwesomePatcher.IntegrationTests
 {
@@ -30,14 +33,19 @@ namespace AwesomePatcher.IntegrationTests
             InputContext.splash = new LoaderScene();
             Expect(InputContext.Inactive, "splash before animation");
             InputContext.splash.hasAnimationBegun = true;
-            Expect(InputContext.Menus, "interactive splash");
+            Expect(InputContext.PointerOnly, "interactive splash");
             InputContext.splash.loading = true;
             Expect(InputContext.Inactive, "departing splash");
             InputContext.splash = null;
-            gui.currentScreen = new GameScreen();
-            Expect(InputContext.Menus, "title, pause or results over a game");
+            foreach (var screen in new GameScreen[] { new MainScreen(), new GameOverScreen() })
+            {
+                gui.currentScreen = screen;
+                Expect(InputContext.PointerOnly, screen.GetType().Name);
+            }
+            gui.currentScreen = new GamePauseScreen();
+            Expect(InputContext.Menus, "pause over a game");
             gui.InputEnabled = false;
-            Expect(InputContext.MenuAimOnly, "unlisted menu with locked GUI");
+            Expect(InputContext.MenuAimOnly, "pause with locked GUI");
             gui.currentScreen = new LoadingScreen();
             Expect(InputContext.Inactive, "loading with locked GUI");
             gui.InputEnabled = true;
@@ -56,6 +64,9 @@ namespace AwesomePatcher.IntegrationTests
             }
             gui.currentScreen = new LevelSelectScreen { inputEnabled = true };
             Expect(InputContext.Levels, "level browser");
+            input.inputEnabled = false;
+            Expect(InputContext.PointerOnly, "gallery while GameInput ignores presses");
+            input.inputEnabled = true;
             gui.currentScreen = null;
             input.disabledInputAtStartOfLevel = true;
             Expect(InputContext.Inactive, "level entry");
@@ -75,11 +86,23 @@ namespace AwesomePatcher.IntegrationTests
             Expect(InputContext.Gameplay | InputContext.SprayCanUnlocked, "spray can only");
             PlayerData.CaffeineEnabled = true;
             Expect(InputContext.Gameplay | InputContext.SprayCanUnlocked | InputContext.CaffeineUnlocked, "spray can and caffeine");
-            gui.currentScreen = new GameScreen();
-            Expect(InputContext.Menus, "pause or results with unlocked equipment");
+            gui.currentScreen = new GamePauseScreen();
+            Expect(InputContext.Menus, "pause with unlocked equipment");
             gui.currentScreen = null;
             Utilities.IsMidGame = false;
-            Expect(InputContext.Inactive, "replay or scene transition");
+            Expect(InputContext.Inactive, "scene transition");
+            Utilities.IsReplayLevel = true;
+            GameController.singleton = null;
+            Expect(InputContext.Replay, "standalone replay without a gameplay controller");
+            gui.currentScreen = new MainScreen();
+            Expect(InputContext.PointerOnly, "title over replay");
+            gui.currentScreen = null;
+            input.disabledInputAtStartOfLevel = true;
+            Expect(InputContext.Inactive, "replay entry lock");
+            input.disabledInputAtStartOfLevel = false;
+            input.inputEnabled = false;
+            Expect(InputContext.Inactive, "replay input lock");
+            Utilities.IsReplayLevel = false;
             GameInput.singleton = null;
             GameController.singleton = null;
             GUIController.instance = null;

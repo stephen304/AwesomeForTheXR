@@ -113,6 +113,8 @@ class SetupScreen : GameScreen { public bool inputEnabled; }
 class GraphicsScreen : GameScreen { public bool inputEnabled; }
 class ChoiceScreen : GameScreen { public bool inputEnabled; }
 class LoadingScreen : GameScreen {}
+class MainScreen : GameScreen {}
+class GameOverScreen : GameScreen {}
 class LoaderScene : UnityEngine.Behaviour { public bool loading, hasAnimationBegun; }
 class GameInput : UnityEngine.Behaviour { public static GameInput singleton; public bool inputEnabled, disabledInputAtStartOfLevel; }
 class GameController : UnityEngine.Behaviour { public static GameController singleton; }
@@ -122,4 +124,4 @@ static class PlayerData
     public static extern bool SprayCanEnabled { get; }
     public static extern bool CaffeineEnabled { get; }
 }
-static class Utilities { public static extern bool IsMidGame { get; } }
+static class Utilities { public static extern bool IsMidGame { get; } public static extern bool IsReplayLevel { get; } }

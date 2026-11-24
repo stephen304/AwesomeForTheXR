@@ -1,6 +1,10 @@
 #pragma once
 #include <openxr/openxr.h>
 
+namespace haptics {
+constexpr XrAction gameplay = 25, pointer = 28, escape = 33;
+}
+
 // Owned by the test process even after the plugin releases its loader reference.
 struct Fixture {
     const char* scenario;
@@ -20,13 +24,14 @@ struct Fixture {
                                                        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     XrSpaceLocationFlags handFlags[2] = {trackedHand, trackedHand};
     unsigned actionSyncs = 0;
-    bool menusActive = false, levelsActive = false, gameActive = false;
+    bool globalActive = false, menusActive = false, levelsActive = false, gameActive = false;
     bool levelStickActive = true;
     XrVector2f levelStick{-.85f, .7f};
     bool syncNotFocused = false;
     struct Button { bool held = false, synced = false, changed = false, active = true; };
-    Button pointerSelect[2]{{true}, {}}, deploy[2], thumbsUp[2], flipOff[2], spray[2], espresso[2];
+    Button pointerSelect[2]{{true}, {}}, deploy[2], thumbsUp[2], flipOff[2], spray[2], espresso[2], escape[2];
     unsigned handTicks[2]{};
+    XrAction lastHaptic[2]{};
     XrResult hapticResult = XR_SUCCESS;
     bool stickActive[2] = {true, true};
     XrVector2f sticks[2] = {{.65f, -.8f}, {-.4f, .3f}};

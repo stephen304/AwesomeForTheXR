@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -18,7 +19,7 @@ constexpr auto stereo = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
 constexpr auto validPose = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
 
 // Press bits shared with the injected GameInput getters.
-enum GameplayPress { ThumbsUpPress = 1, FlipOffPress = 2, SprayPress = 4, DeployPress = 8, EspressoPress = 16 };
+enum ButtonPress { ThumbsUpPress = 1, FlipOffPress = 2, SprayPress = 4, DeployPress = 8, EspressoPress = 16, EscapePress = 32 };
 
 int enabledGameplayPresses(InputContext context) {
     return DeployPress | (hasFlag(context, InputContext::GloveUnlocked) ? ThumbsUpPress | FlipOffPress : 0) |
@@ -134,6 +135,7 @@ void StereoSession::openInput() {
         strcpy_s(info.localizedActionSetName, label);
         requireXR("xrCreateActionSet", CreateActionSet(instance, &info, &handle));
     };
+    createSet("global", "Global controls", globalSet);
     createSet("menus", "Menus", menuSet);
     createSet("levels", "Level selection", levelsSet);
     createSet("game", "Game controls", gameSet);
@@ -150,6 +152,8 @@ void StereoSession::openInput() {
         }
         requireXR("xrCreateAction", CreateAction(owner, &info, &handle));
     };
+    action(globalSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "escape", "Pause / Resume / Back", escape, true);
+    action(globalSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "escape_haptic", "Pause / Resume / Back feedback", escapeHaptic, true);
     action(menuSet, XR_ACTION_TYPE_POSE_INPUT, "aim", "Point at menu", aim, true);
     action(menuSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "pointer_select", "Select with pointer / switch hand", pointerSelect, true);
     action(gameSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "deploy_parachute", "Deploy parachute", deploy, true);
@@ -164,7 +168,7 @@ void StereoSession::openInput() {
     action(gameSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "gesture_haptic", "Gameplay press feedback", pressHaptic, true);
     struct Profile {
         const char *name, *button, *stick, *padPress, *gripPress;
-        bool hasRightA = false;
+        bool hasRightAB = false;
         const char* espressoPath = nullptr;
     };
     for (const Profile profile : {
@@ -177,6 +181,7 @@ void StereoSession::openInput() {
         for (int i = 0; i < 2; ++i) {
             std::string input = std::string(users[i]) + "/input/";
             const XrPath haptic = path(std::string(users[i]) + "/output/haptic");
+            bindings.push_back({escapeHaptic, haptic});
             bindings.push_back({pressHaptic, haptic});
             bindings.push_back({pointerHaptic, haptic});
             bindings.push_back({aim, path(input + "aim/pose")});
@@ -190,8 +195,9 @@ void StereoSession::openInput() {
                 if (i == 0) bindings.push_back({navigate, stick});
             }
         }
-        if (profile.hasRightA) {
+        if (profile.hasRightAB) {
             bindings.push_back({deploy, path("/user/hand/right/input/a/click")});
+            bindings.push_back({escape, path("/user/hand/right/input/b/click")});
         }
         if (profile.espressoPath) bindings.push_back({espresso, path(profile.espressoPath)});
         XrInteractionProfileSuggestedBinding info{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
@@ -201,9 +207,9 @@ void StereoSession::openInput() {
         auto result = SuggestInteractionProfileBindings(instance, &info);
         if (result != XR_ERROR_PATH_UNSUPPORTED) requireXR("xrSuggestInteractionProfileBindings", result);
     }
-    const XrActionSet sets[] = {menuSet, levelsSet, gameSet};
+    const XrActionSet sets[] = {globalSet, menuSet, levelsSet, gameSet};
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
-    attach.countActionSets = 3;
+    attach.countActionSets = static_cast<uint32_t>(std::size(sets));
     attach.actionSets = sets;
     requireXR("xrAttachSessionActionSets", AttachSessionActionSets(session, &attach));
     for (int i = 0; i < 2; ++i) {
@@ -214,13 +220,17 @@ void StereoSession::openInput() {
         info.poseInActionSpace.orientation.w = 1;
         requireXR("xrCreateActionSpace", CreateActionSpace(session, &info, &hands[i].space));
     }
-    if (log) fprintf(log, "OpenXR menu, level navigation and game actions attached.\n");
+    if (log) fprintf(log, "OpenXR global, menu, level navigation and game actions attached.\n");
 }
 
 bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (context != inputContext) {
+        if (!usesGlobal(context)) {
+            escapeReleased.fill(false);
+            buttonPresses &= ~EscapePress;
+        }
         if (isGameplay(context) && isGameplay(inputContext)) {
-            gameplayPresses &= enabledGameplayPresses(context);
+            buttonPresses &= enabledGameplayPresses(context) | EscapePress;
         } else if ((context == InputContext::MenuAimOnly && usesMenuAim(inputContext)) ||
                    (inputContext == InputContext::MenuAimOnly && usesMenuAim(context))) {
             movementStick = {};
@@ -234,7 +244,7 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
         } else {
             actionsActive = false;
             movementStick = turnStick = {};
-            interruptButtonPresses();
+            interruptLocalPresses();
             for (auto& hand : hands) hand.interrupt();
         }
         inputContext = context;
@@ -246,8 +256,9 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
     if (static_cast<int64_t>(unityFrame) - inputFrame != 1) interruptButtonPresses();
     inputFrame = unityFrame;
     actionsActive = false;
-    XrActiveActionSet active[2]{};
+    XrActiveActionSet active[3]{};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+    if (usesGlobal(context)) active[sync.countActiveActionSets++].actionSet = globalSet;
     if (isGameplay(context)) active[sync.countActiveActionSets++].actionSet = gameSet;
     if (usesMenuAim(context))
         active[sync.countActiveActionSets++].actionSet = menuSet;
@@ -273,32 +284,38 @@ bool StereoSession::syncInput(int unityFrame, InputContext context) {
         released = value.isActive && !value.currentState;
         return pressed;
     };
-    if (isGameplay(context)) {
+    const bool gameplay = isGameplay(context);
+    if (gameplay) {
         movementStick = readStick(move);
         turnStick = readStick(turn);
-        const int enabled = enabledGameplayPresses(context);
-        gameplayPresses = 0;
-        for (size_t i = 0; i < hands.size(); ++i) {
-            const XrPath hand = hands[i].path;
-            // Track all releases even while locked. Only unlocked presses can fire or vibrate.
-            int presses = 0;
-            if (freshPress(readButton(deploy, hand), deployReleased[i])) presses |= DeployPress;
-            if (freshPress(readButton(thumbsUp, hand), thumbsUpReleased[i])) presses |= ThumbsUpPress;
-            if (freshPress(readButton(flipOff, hand), flipOffReleased[i])) presses |= FlipOffPress;
-            if (freshPress(readButton(spray, hand), sprayReleased[i])) presses |= SprayPress;
-            if (freshPress(readButton(espresso, hand), espressoReleased[i])) presses |= EspressoPress;
-            presses &= enabled;
-            gameplayPresses |= presses;
-            if (presses) tickHand(pressHaptic, hand);
-        }
-    } else {
-        if (context == InputContext::Levels) movementStick = readStick(navigate);
-        for (size_t i = 0; i < hands.size(); ++i) {
-            auto& hand = hands[i];
+    } else if (context == InputContext::Levels) {
+        movementStick = readStick(navigate);
+    }
+    buttonPresses = 0;
+    for (size_t i = 0; i < hands.size(); ++i) {
+        auto& hand = hands[i];
+        XrAction feedback = XR_NULL_HANDLE;
+        int presses = 0;
+        if (gameplay) {
+            // Track releases even while locked so unlocking a held button cannot fire it.
+            if (freshPress(readButton(deploy, hand.path), deployReleased[i])) presses |= DeployPress;
+            if (freshPress(readButton(thumbsUp, hand.path), thumbsUpReleased[i])) presses |= ThumbsUpPress;
+            if (freshPress(readButton(flipOff, hand.path), flipOffReleased[i])) presses |= FlipOffPress;
+            if (freshPress(readButton(spray, hand.path), sprayReleased[i])) presses |= SprayPress;
+            if (freshPress(readButton(espresso, hand.path), espressoReleased[i])) presses |= EspressoPress;
+            presses &= enabledGameplayPresses(context);
+            if (presses) feedback = pressHaptic;
+        } else if (usesMenuAim(context)) {
             hand.selectState = readButton(pointerSelect, hand.path);
             if (freshPress(hand.selectState, selectReleased[i]) && context != InputContext::MenuAimOnly)
-                tickHand(pointerHaptic, hand.path);
+                feedback = pointerHaptic;
         }
+        if (usesGlobal(context) && freshPress(readButton(escape, hand.path), escapeReleased[i])) {
+            presses |= EscapePress;
+            feedback = escapeHaptic;
+        }
+        buttonPresses |= presses;
+        if (feedback) tickHand(feedback, hand.path);
     }
     actionsActive = true;
     return true;
@@ -325,18 +342,23 @@ void StereoSession::tickHand(XrAction output, XrPath hand) {
     ApplyHapticFeedback(session, &info, reinterpret_cast<const XrHapticBaseHeader*>(&tick));
 }
 
-void StereoSession::interruptButtonPresses() {
+void StereoSession::interruptLocalPresses() {
     deployReleased.fill(false);
     selectReleased.fill(false);
     thumbsUpReleased.fill(false);
     flipOffReleased.fill(false);
     sprayReleased.fill(false);
     espressoReleased.fill(false);
-    gameplayPresses = 0;
+    buttonPresses = 0;
 }
 
-int StereoSession::getGameplayPresses(int unityFrame, InputContext context) {
-    return syncInput(unityFrame, context) ? gameplayPresses : 0;
+void StereoSession::interruptButtonPresses() {
+    interruptLocalPresses();
+    escapeReleased.fill(false);
+}
+
+int StereoSession::getButtonPresses(int unityFrame, InputContext context) {
+    return syncInput(unityFrame, context) ? buttonPresses : 0;
 }
 
 bool StereoSession::mergeSticks(int unityFrame, InputContext context, XrVector2f& movement, XrVector2f& look) {
@@ -704,6 +726,7 @@ void StereoSession::close() noexcept {
     if (gameSet) DestroyActionSet(gameSet);
     if (levelsSet) DestroyActionSet(levelsSet);
     if (menuSet) DestroyActionSet(menuSet);
+    if (globalSet) DestroyActionSet(globalSet);
     if (log) fprintf(log, "xrDestroySession: %d; %u stereo projections in %u frames.\n",
                      static_cast<int>(result), submitted, frames);
     session = XR_NULL_HANDLE;

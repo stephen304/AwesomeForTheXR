@@ -12,10 +12,10 @@ namespace AwesomePatcher.Core
             var owner = input.Fields.Single(f => f.Name == "singleton");
             var alive = game.GetMemberReferences().OfType<MethodReference>().Single(m =>
                 m.FullName == "System.Boolean UnityEngine.Object::op_Implicit(UnityEngine.Object)");
-            var presses = new FieldDefinition("aftxrGameplayPresses", FieldAttributes.Private, game.TypeSystem.Int32);
+            var presses = new FieldDefinition("aftxrButtonPresses", FieldAttributes.Private, game.TypeSystem.Int32);
             input.Fields.Add(presses);
 
-            const string entry = "AFTXR_GetGameplayPresses";
+            const string entry = "AFTXR_GetButtonPresses";
             var native = new MethodDefinition(entry, MethodAttributes.Private | MethodAttributes.Static |
                 MethodAttributes.HideBySig | MethodAttributes.PInvokeImpl, game.TypeSystem.Int32) {
                 ImplAttributes = MethodImplAttributes.PreserveSig,
@@ -53,7 +53,7 @@ namespace AwesomePatcher.Core
             ClearAfter("LateUpdate", "lastFlipOff");
 
             // Merge after retail edge detection so adjacent physical and XR presses stay independent.
-            void AddGameplayPress(string property, int mask)
+            void AddButtonPress(string property, int mask)
             {
                 var body = input.Properties.Single(p => p.Name == property).GetMethod.Body;
                 var edit = body.GetILProcessor();
@@ -68,9 +68,10 @@ namespace AwesomePatcher.Core
                 edit.Emit(OpCodes.Or);
                 edit.Emit(OpCodes.Ret);
             }
-            AddGameplayPress("ThumbsUp", 1);
-            AddGameplayPress("FlipOff", 2);
-            AddGameplayPress("Graffiti", 4);
+            AddButtonPress("ThumbsUp", 1);
+            AddButtonPress("FlipOff", 2);
+            AddButtonPress("Graffiti", 4);
+            AddButtonPress("Escape", 32);
 
             // These retail buttons also serve results shortcuts. Merge XR only for their gameplay callers.
             void AddGameplayOnlyGetter(string physicalProperty, string name, int mask, string consumer)
@@ -89,7 +90,7 @@ namespace AwesomePatcher.Core
                 get.Emit(OpCodes.Ret);
                 get.Append(readPhysical);
                 get.Emit(OpCodes.Ret);
-                AddGameplayPress(name, mask);
+                AddButtonPress(name, mask);
 
                 var update = game.GetType(consumer).Methods.Single(m => m.Name == "Update");
                 update.Body.Instructions.Single(i => i.OpCode == OpCodes.Call && i.Operand == legacy).Operand = getter;
