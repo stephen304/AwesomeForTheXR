@@ -1,6 +1,9 @@
 # AwesomeForTheXR
 
-This is an AI-assisted attempt to patch OpenXR support into the arcade base-jumping game AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome.
+This is an AI-assisted patch that adds OpenXR support to the arcade base-jumping game AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome.
+
+> [!NOTE]
+> Also check out [eliwss0's VR remaster](https://github.com/eliwss0/V-AaaaaAAaaaAAAaaAAAAaAAAAAR), which goes further and also includes hand and item models in game!
 
 AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome is a "semi-sequel" to AaaaaAAaaaAAAaaAAAAaAAAAA!!! - A Reckless Disregard for Gravity, bringing new levels and VR support for Oculus. The SDK used only supports the Oculus Legacy Runtime 0.5/0.6, which is used on the Oculus DK2. This prevents the VR mode from being played on modern headsets like the Quest or lighthouse based headsets.
 
