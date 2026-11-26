@@ -23,6 +23,34 @@ function Add-BundleFile([string] $name, [byte[]] $bytes) {
     $module.Resources.Add($resource)
 }
 
+function Assert-PackagedPayload([string] $image, [string] $payloadDirectory) {
+    $prefix = 'AwesomePatcher.Bundle.'
+    $expected = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+    foreach ($file in Get-ChildItem -LiteralPath $payloadDirectory -File) {
+        $expected.Add($prefix + $file.Name, $file.FullName)
+    }
+
+    $package = [Mono.Cecil.ModuleDefinition]::ReadModule($image)
+    try {
+        foreach ($resource in $package.Resources) {
+            if (!$resource.Name.StartsWith($prefix, [StringComparison]::Ordinal)) { continue }
+            $path = $expected[$resource.Name]
+            if (!$path) { throw "Unexpected packaged resource: $($resource.Name)" }
+
+            $stream = $resource.GetResourceStream()
+            try { $actual = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash }
+            finally { $stream.Dispose() }
+            if ($actual -ne (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash) {
+                throw "Packaged resource differs from the staged file: $($resource.Name)"
+            }
+            [void]$expected.Remove($resource.Name)
+        }
+        if ($expected.Count) { throw "Missing packaged resources: $($expected.Keys -join ', ')" }
+    } finally {
+        $package.Dispose()
+    }
+}
+
 Push-Location $PSScriptRoot
 try {
     & dotnet tool restore | Out-Host
@@ -60,6 +88,7 @@ try {
     $writer.DeterministicMvid = $true
     $writer.Timestamp = 0
     $module.Write($stage, $writer)
+    Assert-PackagedPayload $stage (Join-Path $build 'patch')
     if ([IO.File]::Exists($output)) {
         [IO.File]::Replace($stage, $output, [System.Management.Automation.Language.NullString]::Value)
     } else {

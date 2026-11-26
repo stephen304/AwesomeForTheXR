@@ -5,6 +5,10 @@
     <AssemblyName>AwesomePatcher</AssemblyName>
     <RootNamespace>AwesomePatcher</RootNamespace>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(AwesomePatcherReleaseVersion)' != ''">
+    <Version>$(AwesomePatcherReleaseVersion)</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\..\runtime\plugin\OpenXR-LICENSE.txt" LogicalName="OpenXR-LICENSE.txt" />
     <EmbeddedResource Include="..\..\..\LICENSE.txt" LogicalName="LICENSE.txt" />

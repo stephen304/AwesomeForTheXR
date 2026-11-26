@@ -35,6 +35,9 @@ try {
     $output = Join-Path $root ('artifacts/patcher/bin/AwesomePatcher/' + $Configuration.ToLowerInvariant())
     $payload = Join-Path $output 'patch'
     [IO.Directory]::CreateDirectory($payload) | Out-Null
+    foreach ($file in Get-ChildItem -LiteralPath $payload -File -Force) {
+        Remove-Item -LiteralPath $file.FullName -Force
+    }
     foreach ($source in @($native, $forwarder, $startup, $loader)) {
         $destination = Join-Path $payload ([IO.Path]::GetFileName($source))
         Copy-Item -LiteralPath $source -Destination $destination -Force

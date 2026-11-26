@@ -1,0 +1,69 @@
+name: Build and package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      product-version:
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build the Release patcher and Win32 payload
+        env:
+          AwesomePatcherReleaseVersion: ${{ inputs.product-version }}
+        run: .\Build.ps1 -Configuration Release
+
+      - name: Run patcher integration tests
+        run: .\artifacts\patcher\bin\AwesomePatcher.IntegrationTests\release\AwesomePatcher.IntegrationTests.exe
+
+      - name: Build the native test runner
+        run: |
+          cmake -S runtime -B artifacts/runtime/build -DAFTXR_BUILD_TESTS=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build artifacts/runtime/build --config Release --target PreflightTests
+
+      - name: Run native OpenXR tests
+        run: ctest --test-dir artifacts/runtime/build -C Release --no-tests=error --output-on-failure
+
+      - name: Package the single executable
+        run: .\Package.ps1
+
+      - name: Check the packaged executable
+        env:
+          EXPECTED_VERSION: ${{ inputs.product-version }}
+        run: |
+          $exe = Get-Item .\artifacts\release\AwesomePatcher.exe
+          & $exe.FullName --licenses | Out-Null
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($env:EXPECTED_VERSION -and $exe.VersionInfo.ProductVersion -cne $env:EXPECTED_VERSION) {
+            throw "Packaged EXE reports product version '$($exe.VersionInfo.ProductVersion)'; expected '$env:EXPECTED_VERSION'."
+          }
+
+      - name: Upload AwesomePatcher.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: artifacts/release/AwesomePatcher.exe
+          archive: false
+          if-no-files-found: error

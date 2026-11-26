@@ -10,7 +10,7 @@ This project aims to patch in support for OpenXR in order to preserve this game 
 
 ## Quick Start
 
-1. Download the latest release zip.
+1. Download `AwesomePatcher.exe` from the latest GitHub Release.
 2. With the game closed, run `AwesomePatcher.exe`.
 3. Confirm the game location and click the Patch button.
 4. Run the game from steam using any of the 4 VR launch options.
