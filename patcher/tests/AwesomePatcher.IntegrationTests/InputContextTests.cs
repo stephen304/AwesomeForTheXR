@@ -40,7 +40,13 @@ namespace AwesomePatcher.IntegrationTests
             foreach (var screen in new GameScreen[] { new MainScreen(), new GameOverScreen() })
             {
                 gui.currentScreen = screen;
-                Expect(InputContext.PointerOnly, screen.GetType().Name);
+                Expect(InputContext.PointerAndRecenter, screen.GetType().Name);
+                input.disabledInputAtStartOfLevel = true;
+                Expect(InputContext.PointerOnly, "level-entry lock on " + screen.GetType().Name);
+                input.disabledInputAtStartOfLevel = false;
+                input.inputEnabled = false;
+                Expect(InputContext.PointerOnly, "input lock on " + screen.GetType().Name);
+                input.inputEnabled = true;
             }
             gui.currentScreen = new GamePauseScreen();
             Expect(InputContext.Menus, "pause over a game");
@@ -95,7 +101,7 @@ namespace AwesomePatcher.IntegrationTests
             GameController.singleton = null;
             Expect(InputContext.Replay, "standalone replay without a gameplay controller");
             gui.currentScreen = new MainScreen();
-            Expect(InputContext.PointerOnly, "title over replay");
+            Expect(InputContext.PointerAndRecenter, "title over replay");
             gui.currentScreen = null;
             input.disabledInputAtStartOfLevel = true;
             Expect(InputContext.Inactive, "replay entry lock");

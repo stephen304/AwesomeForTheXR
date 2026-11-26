@@ -1,7 +1,7 @@
 // Returned to the native plugin from both the camera and GameInput paths.
 internal static class InputContext
 {
-    internal const int Inactive = 0, Menus = 1, Levels = 2, MenuAimOnly = 3, Gameplay = 4, PointerOnly = 5, Replay = 6;
+    internal const int Inactive = 0, Menus = 1, Levels = 2, MenuAimOnly = 3, Gameplay = 4, PointerOnly = 5, Replay = 6, PointerAndRecenter = 7;
     internal const int GloveUnlocked = 8, SprayCanUnlocked = 16, CaffeineUnlocked = 32;
     internal static LoaderScene splash;
 
@@ -26,7 +26,8 @@ internal static class InputContext
             if (graphics != null && !graphics.inputEnabled) return MenuAimOnly;
             var choice = screen as ChoiceScreen;
             if (choice != null && !choice.inputEnabled) return MenuAimOnly;
-            if (!acceptsInput || screen is MainScreen || screen is GameOverScreen) return PointerOnly;
+            if (!acceptsInput) return PointerOnly;
+            if (screen is MainScreen || screen is GameOverScreen) return PointerAndRecenter;
             return levels != null ? Levels : Menus;
         }
 

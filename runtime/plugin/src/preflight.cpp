@@ -424,6 +424,13 @@ extern "C" void __cdecl AFTXR_EyeProjection(int eye, float nearClip, float farCl
     std::lock_guard<std::mutex> lock(launchMutex);
     if (launch.stereo && unsigned(eye)<2 && matrix) launch.stereo->projection(eye,nearClip,farClip,matrix);
 }
+extern "C" int __cdecl AFTXR_ManualRecenterInput() {
+    std::lock_guard<std::mutex> lock(launchMutex);
+    if (!launch.stereo || launch.stereoFailed) return 0;
+    try { return static_cast<int>(launch.stereo->manualRecenter()); }
+    catch (const std::exception& e) { failStereo(e.what()); return 0; }
+}
+
 extern "C" void __cdecl AFTXR_Recenter() {
     std::lock_guard<std::mutex> lock(launchMutex);
     if (launch.stereo) launch.stereo->recenter();

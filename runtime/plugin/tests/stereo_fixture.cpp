@@ -39,7 +39,7 @@ Eye& eye(XrSwapchain handle) {
 
 namespace {
 const XrActionSet globalSet = (XrActionSet)31;
-const XrAction escape = (XrAction)32;
+const XrAction escape = (XrAction)32, recenterButton = (XrAction)34;
 const XrActionSet menuSet = (XrActionSet)14;
 const XrActionSet gameSet = (XrActionSet)17, levelsSet = (XrActionSet)26;
 const XrAction navigate = (XrAction)27;
@@ -56,11 +56,7 @@ int handIndex(XrPath path) {
     expect(path == handPaths[0] || path == handPaths[1]);
     return path == handPaths[1] ? 1 : 0;
 }
-const std::map<std::string, std::string> profiles = {
-    {"khr/simple_controller", "select/click"}, {"htc/vive_controller", "trigger/click"},
-    {"valve/index_controller", "trigger/value"}, {"oculus/touch_controller", "trigger/value"},
-    {"microsoft/motion_controller", "trigger/value"}
-};
+const std::array<std::string, 2> profiles = {"valve/index_controller", "oculus/touch_controller"};
 std::set<XrPath> suggested;
 const XrSpace handSpaces[] = {(XrSpace)23,(XrSpace)24};
 bool attached = false;
@@ -86,11 +82,12 @@ XRAPI_ATTR XrResult XRAPI_CALL xrDestroyActionSet(XrActionSet set) {
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCreateInfo* info, XrAction* out) {
     if (set == globalSet) {
-        const bool button = !strcmp(info->actionName, "escape");
+        const bool recenter = !strcmp(info->actionName, "recenter");
+        const bool button = recenter || !strcmp(info->actionName, "escape");
         expect((button || !strcmp(info->actionName, "escape_haptic")) &&
                info->actionType == (button ? XR_ACTION_TYPE_BOOLEAN_INPUT : XR_ACTION_TYPE_VIBRATION_OUTPUT) &&
                info->countSubactionPaths == 2 && info->subactionPaths[0] == handPaths[0] && info->subactionPaths[1] == handPaths[1]);
-        *out = button ? escape : haptics::escape;
+        *out = recenter ? recenterButton : button ? escape : haptics::escape;
         return XR_SUCCESS;
     }
     if (!strcmp(info->actionName, "navigate")) {
@@ -132,40 +129,39 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateAction(XrActionSet set, const XrActionCre
 XRAPI_ATTR XrResult XRAPI_CALL xrSuggestInteractionProfileBindings(XrInstance, const XrInteractionProfileSuggestedBinding* info) {
     expect(!attached && suggested.insert(info->interactionProfile).second);
     for (const auto& profile : profiles) {
-        if (info->interactionProfile != pathId("/interaction_profiles/" + profile.first)) continue;
+        if (info->interactionProfile != pathId("/interaction_profiles/" + profile)) continue;
         const auto* first = info->suggestedBindings;
         const auto* end = first + info->countSuggestedBindings;
-        const bool simple = profile.first == "khr/simple_controller";
-        const bool hasA = profile.first == "valve/index_controller" || profile.first == "oculus/touch_controller";
-        const bool index = profile.first == "valve/index_controller";
-        const bool touch = profile.first == "oculus/touch_controller";
-        expect(info->next == nullptr && info->countSuggestedBindings == (simple ? 12u : index ? 22u : touch ? 20u : 19u));
+        const bool index = profile == "valve/index_controller";
+        const unsigned expectedCount = index ? 23u : 22u;
+        expect(info->next == nullptr && info->countSuggestedBindings == expectedCount);
         auto has = [&](XrAction action, XrPath path) {
             return std::any_of(first, end, [&](const XrActionSuggestedBinding& b) {
                 return b.action == action && b.binding == path;
             });
         };
-        const auto rightA = pathId("/user/hand/right/input/a/click");
-        expect(has(deploy, rightA) == hasA);
-        expect(has(escape, pathId("/user/hand/right/input/b/click")) == hasA);
+        expect(has(deploy, pathId("/user/hand/right/input/a/click")));
+        expect(has(escape, pathId("/user/hand/right/input/b/click")));
+        expect(has(recenterButton, pathId("/user/hand/left/input/b/click")) == index);
+        expect(has(recenterButton, pathId("/user/hand/left/input/y/click")) == !index);
         expect(has(espresso, pathId("/user/hand/left/input/a/click")) == index);
-        expect(has(espresso, pathId("/user/hand/left/input/x/click")) == touch);
+        expect(has(espresso, pathId("/user/hand/left/input/x/click")) == !index);
         expect(!has(deploy, pathId("/user/hand/left/input/a/click")));
         expect(!has(deploy, pathId("/user/hand/left/input/x/click")));
         for (int i = 0; i < 2; ++i) {
             const auto input = std::string(users[i]) + "/input/";
+            expect(!has(recenterButton, pathId(input + "thumbstick/click")));
             expect(has(haptics::escape, pathId(std::string(users[i]) + "/output/haptic")));
             expect(has(haptics::pointer, pathId(std::string(users[i]) + "/output/haptic")));
             expect(has(haptics::gameplay, pathId(std::string(users[i]) + "/output/haptic")));
-            expect(has(aim, pathId(input + "aim/pose")) && has(selectButton, pathId(input + profile.second)));
-            expect(has(spray, pathId(input + profile.second)));
-            if (!simple) {
-                const char* stick = profile.first == "htc/vive_controller" ? "trackpad" : "thumbstick";
-                expect(has(navigate, pathId(input + stick)) == (i == 0));
-                expect(has(i == 0 ? move : turn, pathId(input + stick)));
-                expect(has(flipOff, pathId(input + (index ? "squeeze/force" : touch ? "squeeze/value" : "squeeze/click"))));
-                if (!touch) expect(has(thumbsUp, pathId(input + (index ? "trackpad/force" : "trackpad/click"))));
-            }
+            expect(has(aim, pathId(input + "aim/pose")) && has(selectButton, pathId(input + "trigger/value")));
+            expect(has(spray, pathId(input + "trigger/value")));
+            const XrPath stick = pathId(input + "thumbstick");
+            expect(has(navigate, stick) == (i == 0));
+            expect(has(i == 0 ? move : turn, stick));
+            expect(has(flipOff, pathId(input + (index ? "squeeze/force" : "squeeze/value"))));
+            expect(has(thumbsUp, pathId(input + "thumbstick/click")) == (!index && i == 1));
+            expect(has(thumbsUp, pathId(input + "trackpad/force")) == index);
         }
         return XR_SUCCESS;
     }
@@ -203,9 +199,10 @@ XRAPI_ATTR XrResult XRAPI_CALL xrSyncActions(XrSession s, const XrActionsSyncInf
     expect(!fixture.gameActive || (!fixture.menusActive && fixture.globalActive));
     for (unsigned i = 0; i < count; ++i) expect(sets[i].subactionPath == XR_NULL_PATH);
     if (fixture.syncNotFocused) return XR_SESSION_NOT_FOCUSED;
-    for (auto* buttons : {fixture.pointerSelect, fixture.deploy, fixture.thumbsUp, fixture.flipOff, fixture.spray, fixture.espresso, fixture.escape}) {
+    for (auto* buttons : {fixture.pointerSelect, fixture.deploy, fixture.thumbsUp, fixture.flipOff, fixture.spray, fixture.espresso, fixture.escape, fixture.recenterButton}) {
         // An inactive set does not sample presses made while another set is active.
-        const bool setActive = buttons == fixture.escape ? fixture.globalActive :
+        const bool globalButton = buttons == fixture.escape || buttons == fixture.recenterButton;
+        const bool setActive = globalButton ? fixture.globalActive :
                                buttons == fixture.pointerSelect ? fixture.menusActive : fixture.gameActive;
         if (!setActive) continue;
         for (int i = 0; i < 2; ++i) {
@@ -244,12 +241,14 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateVector2f(XrSession s, const XrAct
     return XR_SUCCESS;
 }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetActionStateBoolean(XrSession, const XrActionStateGetInfo* get, XrActionStateBoolean* state) {
-    expect(get->action == escape ? currentFixture().globalActive :
+    const bool global = get->action == escape || get->action == recenterButton;
+    expect(global ? currentFixture().globalActive :
            get->action == selectButton ? currentFixture().menusActive : currentFixture().gameActive);
-    expect(state->type == XR_TYPE_ACTION_STATE_BOOLEAN && (get->action == escape || get->action == selectButton ||
+    expect(state->type == XR_TYPE_ACTION_STATE_BOOLEAN && (global || get->action == selectButton ||
            get->action == deploy || get->action == thumbsUp || get->action == flipOff || get->action == spray || get->action == espresso));
     const auto& fixture = currentFixture();
-    const auto* buttons = get->action == escape ? fixture.escape :
+    const auto* buttons = get->action == recenterButton ? fixture.recenterButton :
+                          get->action == escape ? fixture.escape :
                           get->action == selectButton ? fixture.pointerSelect :
                           get->action == deploy ? fixture.deploy :
                           get->action == thumbsUp ? fixture.thumbsUp :

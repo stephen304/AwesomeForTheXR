@@ -193,7 +193,7 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.profileChanged = true;
     frame(12);
     check(hand(0,tracked) == 0 && generation[0] == before, "same profile returned without live position");
-    state.handProfiles[0] = "khr/simple_controller";
+    state.handProfiles[0] = "oculus/touch_controller";
     state.profileChanged = true;
     frame(13);
     check(hand(0,tracked) == 3 && generation[0] != before, "replacement rotation-only source");
@@ -507,8 +507,15 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
         context = InputContext::PointerOnly;
         state.escape[1].held = true;
         sample(0, 0, 0);
-        check(!state.globalActive && state.menusActive, "splash, title and VR results must be pointer-only");
+        check(!state.globalActive && state.menusActive, "splash and locked screens must be pointer-only");
         state.escape[0].held = state.escape[1].held = false;
+
+        context = InputContext::PointerAndRecenter;
+        sample(0, 0, 0); // Observe release with the global set active on the title/results screen.
+        state.escape[1].held = true;
+        sample(0, 0, 0); // A fresh Escape must produce neither a game press nor a haptic tick.
+        check(state.escape[1].synced && state.escape[1].changed, "fixture missed the title/results Escape press");
+        state.escape[1].held = false;
     }
 
     context = InputContext::Levels;
@@ -546,6 +553,83 @@ void testHeadGeometry(HMODULE plugin, Fixture& state) {
     state.pointerSelect[0].held = true;
     frame(++number);
     check(hand(0,tracked) == 3 && state.handTicks[0] == ticksBeforeFade + 1, "fresh menu press after the fade");
+
+    auto manual = entry<int (__cdecl*)()>(plugin, "AFTXR_ManualRecenterInput");
+    constexpr int locked = 0, physical = 1, requested = 2;
+    for (bool gameInputFirst : {false, true}) {
+        auto sample = [&](int expected, unsigned tickMask = 0) {
+            const unsigned ticks[] = {state.handTicks[0], state.handTicks[1]};
+            ++number;
+            if (gameInputFirst) presses(number);
+            frame(number);
+            check(manual() == expected && manual() == locked, "shared recenter eligibility or duplicate dispatch");
+            for (int i = 0; i < 2; ++i) {
+                const bool tick = (tickMask & (1u << i)) != 0;
+                check(state.handTicks[i] == ticks[i] + unsigned(tick) && (!tick || state.lastHaptic[i] == haptics::escape),
+                      "wrong recenter feedback");
+            }
+        };
+        context = InputContext::PointerOnly;
+        sample(locked);
+        context = InputContext::PointerAndRecenter;
+        sample(locked);
+        sample(physical);
+        check(state.globalActive && state.menusActive, "title/results recenter must activate global and pointer");
+        const int handIndex = gameInputFirst ? 1 : 0; // Default left, then a right-hand rebind.
+        auto& button = state.recenterButton[handIndex];
+        button.held = true;
+        sample(requested, 1u << handIndex);
+        sample(physical); // Holding the button does not repeat or pulse again.
+
+        context = InputContext::MenuAimOnly;
+        sample(locked);
+        context = InputContext::Replay;
+        sample(locked);
+        sample(physical); // Still held across the lock.
+        button.held = false;
+        sample(physical);
+
+        state.nextEvent = XR_SESSION_STATE_VISIBLE;
+        state.followingEvent = XR_SESSION_STATE_FOCUSED;
+        button.held = true;
+        sample(locked);
+        // GameInput-first loses its cached sync when the camera drains the focus events.
+        sample(gameInputFirst ? locked : physical);
+        sample(physical);
+        button.held = false;
+        sample(physical);
+        // Escape ticks during input sync; recenter reaches the camera callback later in this frame.
+        state.escape[handIndex].held = button.held = true;
+        sample(requested, 1u << handIndex);
+        check(presses(number) == escapeBit, "same-hand recenter suppressed Escape");
+        state.escape[handIndex].held = button.held = false;
+        sample(physical);
+    }
+
+    for (bool lockBeforeCamera : {true, false}) {
+        context = InputContext::Menus;
+        state.recenterButton[0].held = false;
+        frame(++number);
+        check(manual() == physical, "recenter must be armed before the menu lock changes");
+
+        state.recenterButton[0].held = true;
+        const auto syncs = state.actionSyncs;
+        const auto leftTicks = state.handTicks[0], rightTicks = state.handTicks[1];
+        context = lockBeforeCamera ? InputContext::Menus : InputContext::MenuAimOnly;
+        presses(++number);
+        check(state.globalActive == lockBeforeCamera, "wrong global set during GameInput sample");
+        context = lockBeforeCamera ? InputContext::MenuAimOnly : InputContext::Menus;
+        frame(number);
+        check(state.actionSyncs == syncs + 1 && manual() == locked && !state.invalidCall,
+              "same-frame menu lock change must discard recenter without resyncing");
+
+        context = InputContext::Menus;
+        frame(++number);
+        check(manual() == locked, "stale sample armed physical recenter on the first unlocked frame");
+        frame(++number);
+        check(manual() == physical && state.handTicks[0] == leftTicks && state.handTicks[1] == rightTicks,
+              "recenter pressed across a menu lock must stay silent until released");
+    }
 }
 
 void testFrames(HMODULE plugin, ID3D11Device* device, Fixture& state, bool loseSession) {

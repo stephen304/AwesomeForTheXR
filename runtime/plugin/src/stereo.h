@@ -32,6 +32,8 @@ public:
     int getButtonPresses(int unityFrame, InputContext context);
     bool mergeSticks(int unityFrame, InputContext context, XrVector2f& movement, XrVector2f& look);
     void projection(int eye, float nearClip, float farClip, float* matrix) const;
+    enum class ManualRecenter { Locked, CheckPhysical, XRPressed };
+    ManualRecenter manualRecenter();
     void recenter() { recenterPending = true; }
     void renderedEye(unsigned eye, IUnknown* texture, int unityFrame);
     void submit();
@@ -62,14 +64,20 @@ private:
     bool actionsActive = false;
     XrAction aim = XR_NULL_HANDLE, pointerSelect = XR_NULL_HANDLE, pointerHaptic = XR_NULL_HANDLE;
     XrAction escape = XR_NULL_HANDLE, escapeHaptic = XR_NULL_HANDLE;
+    XrAction recenterButton = XR_NULL_HANDLE;
+    std::array<bool, 2> recenterReleased{};
+    bool recenterEligible = false, recenterSynced = false;
+    int manualFrame = -1;
+    unsigned tickedHands = 0;
     XrAction deploy = XR_NULL_HANDLE, espresso = XR_NULL_HANDLE;
     XrAction thumbsUp = XR_NULL_HANDLE, flipOff = XR_NULL_HANDLE, spray = XR_NULL_HANDLE, pressHaptic = XR_NULL_HANDLE;
     std::array<bool, 2> escapeReleased{}, selectReleased{}, deployReleased{}, thumbsUpReleased{}, flipOffReleased{}, sprayReleased{}, espressoReleased{};
     int buttonPresses = 0;
     XrActionStateBoolean readButton(XrAction action, XrPath hand);
+    void interruptRecenter();
     void interruptLocalPresses();
     void interruptButtonPresses();
-    void tickHand(XrAction output, XrPath hand);
+    void tickHand(XrAction output, size_t index);
     struct Hand {
         XrPath path{}, lastProfile{};
         XrActionStateBoolean selectState{};

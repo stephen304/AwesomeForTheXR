@@ -20,6 +20,7 @@ namespace AwesomePatcher.Core
             var recipe = new CameraRecipe(module, plugin, abort);
             recipe.PatchDisplay();
             recipe.PatchManager(inputContext);
+            recipe.RouteManualRecenter();
             recipe.PatchRig();
             recipe.PatchDesktopMirror();
             recipe.MoveHeadAttachments();
@@ -203,6 +204,47 @@ namespace AwesomePatcher.Core
             var mirror=module.GetType("ToggleMirrorMode");
             foreach(var name in new[]{"Start","Update","SetExistingMirrorMode"})
                 Rewrite(Method(mirror,name)).Emit(OpCodes.Ret);
+        }
+
+        private void RouteManualRecenter()
+        {
+            // The retail menu Update only dispatches recenter. Gameplay has the same block at its tail.
+            var menu = Method(module.GetType("MainMenu"), "Update");
+            var input = module.GetType("GameInput");
+            var f1 = At(menu, 0x0a);
+            var readKey = (MethodReference)f1.Next.Operand;
+            var log = (MethodReference)At(menu, 0x28).Operand;
+            var settings = Method(module.GetType("OculusGameSettings"), "Update");
+            var tail = At(settings, 0x43f);
+            if (!Equals(f1.Operand, 282) || !Equals(tail.Operand, f1.Operand))
+                throw new InvalidOperationException("Unexpected retail recenter shortcut.");
+            Rewrite(menu).Emit(OpCodes.Ret);
+            var il = settings.Body.GetILProcessor();
+            while (tail.Next != null) il.Remove(tail.Next);
+            tail.OpCode = OpCodes.Ret;
+            tail.Operand = null;
+
+            // BeginFrame has polled focus and synchronized this frame. LateUpdate also follows
+            // GameInput.Update, which captures the bumper. Both paths share one RecenterPose call.
+            var late = Method(manager, "LateUpdate");
+            il = late.Body.GetILProcessor();
+            var done = late.Body.Instructions.Last();
+            var physical = il.Create(OpCodes.Ldc_I4, 282); // KeyCode.F1
+            var request = il.Create(OpCodes.Ldstr, "Recenter Player");
+            il.Remove(done);
+            il.Emit(OpCodes.Call, Native("AFTXR_ManualRecenterInput", module.TypeSystem.Int32));
+            il.Emit(OpCodes.Switch, new[] { done, physical, request });
+            il.Emit(OpCodes.Br, done);
+            il.Append(physical);
+            il.Emit(OpCodes.Call, readKey);
+            il.Emit(OpCodes.Brtrue, request);
+            il.Emit(OpCodes.Call, Method(input, "get_Resetorientation"));
+            il.Emit(OpCodes.Brfalse, done);
+            il.Append(request);
+            il.Emit(OpCodes.Call, log);
+            il.Emit(OpCodes.Call, Method(manager, "get_display"));
+            il.Emit(OpCodes.Callvirt, Method(display, "RecenterPose"));
+            il.Append(done);
         }
 
         private void PatchRig()

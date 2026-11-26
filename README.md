@@ -39,20 +39,21 @@ The same executable accepts `verify`, `patch`, and `revert` in a terminal. Run `
 
 ## Default Controls
 
-| Action | Valve Index | Oculus Touch
+The patch supplies default OpenXR bindings for Valve Index Knuckles and Oculus Touch.
+
+| Action | Knuckles | Oculus Touch
 |---|---|---|
 | Menu Navigation | Either trigger | Either trigger |
 | Level Select | Left stick, trigger click, or click and drag | Left stick, trigger click, or click and drag
 | Move | Left stick | Left stick |
 | Turn left or right | Right stick | Right stick |
+| Recenter view | Left B | Y |
 | Escape (Pause/Resume/Exit) | Right B |  B |
 | Deploy Parachute | Right A | A |
-| Thumbs Up | Press either trackpad | *— |
+| Thumbs Up | Press either trackpad | Click right stick |
 | Flip Off | Squeeze either grip | Squeeze either grip |
 | Spray Graffiti | Either trigger | Either trigger |
 | Use Espresso | Left A | X |
-
-`* Missing actions should be re-bindable in SteamVR controller bindings - I wasn't sure what to set the default to here`
 
 ## Approach
 
@@ -63,7 +64,6 @@ The patcher modifies the game runner to load an OpenXR plugin that submits the e
 * If the game errors with 'The 32-bit OpenXR runtime is unavailable', make sure you're using SteamVR 2.17 or later and select `Set SteamVR as OpenXR Runtime` under SteamVR Settings > OpenXR.
 
 ## Known Issues
-* The menu UI and in-jump tilt has its own recentering behavior which can be annoying, there is no recenter binding yet besides the original F1 and controller bumper. Keeping your head straight during menu transitions and loading boundaries helps keep it centered.
 * The desktop mirror cam occasionally glitches out and shows a small pixelated view. I'm not sure how to reliably reproduce this so I'll take any hints.
 * Switching between the game window and other windows can be a little glitchy and having the desktop window focused can interfere with using the mouse.
 * The desktop window size affects the size of the menu render area. Leave it full sized for best results.

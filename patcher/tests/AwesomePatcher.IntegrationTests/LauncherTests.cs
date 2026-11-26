@@ -367,6 +367,29 @@ namespace AwesomePatcher.IntegrationTests
                 throw new InvalidOperationException("DisregardInput must start and finish on the same real-time clock.");
         }
 
+        private static void CheckManualRecenter(ModuleDefinition module)
+        {
+            var display = module.GetType("OVRDisplay");
+            var request = display.Methods.Single(m => m.Name == "RecenterPose");
+            var manager = module.GetType("OVRManager");
+            var late = manager.Methods.Single(m => m.Name == "LateUpdate").Body.Instructions;
+            var route = late.Single(i => i.OpCode == OpCodes.Switch);
+            var cases = (Instruction[])route.Operand;
+            if (cases.Length != 3 || cases[0].OpCode != OpCodes.Ret ||
+                !Equals(cases[1].Operand, 282) || ((MethodReference)cases[1].Next.Operand).Name != "GetKeyDown" ||
+                cases[1].Next.Next.OpCode != OpCodes.Brtrue || cases[1].Next.Next.Operand != cases[2] ||
+                ((MethodReference)cases[1].Next.Next.Next.Operand).Name != "get_Resetorientation" ||
+                cases[1].Next.Next.Next.Next.OpCode != OpCodes.Brfalse || cases[1].Next.Next.Next.Next.Operand != cases[0] ||
+                !Equals(cases[2].Operand, "Recenter Player") || cases[2].Next.Next.Next.Operand != request ||
+                ((MethodReference)route.Previous.Operand).Name != "AFTXR_ManualRecenterInput" ||
+                route.Previous.Previous.Operand != display.Methods.Single(m => m.Name == "BeginFrame"))
+                throw new InvalidOperationException("The camera must share one gated recenter dispatch for F1, bumper and XR.");
+            if (!manager.Methods.Single(m => m.Name == "Awake").Body.Instructions.Any(i => i.Operand == request) ||
+                new[] { "MainMenu", "OculusGameSettings" }.Any(t => module.GetType(t).Methods.Single(m => m.Name == "Update")
+                    .Body.Instructions.Any(i => i.Operand == request)))
+                throw new InvalidOperationException("Unexpected automatic or legacy manual recenter dispatch.");
+        }
+
         private static void CheckSceneGuards(string path)
         {
             using (var module = ModuleDefinition.ReadModule(path))
@@ -381,6 +404,7 @@ namespace AwesomePatcher.IntegrationTests
                     .Select(m => m?.Name).OrderBy(name => name);
                 if (!contextCalls.SequenceEqual(new[] { "AFTXR_BeginCameraFrame", "AFTXR_GetButtonPresses", "AFTXR_MergeGamepadSticks" }))
                     throw new InvalidOperationException("Render and GameInput must use the same context for each native sample.");
+                CheckManualRecenter(module);
                 CheckLevelEntryTiming(module);
                 CheckPausePanel(module);
                 CheckHeadAnchors(module);

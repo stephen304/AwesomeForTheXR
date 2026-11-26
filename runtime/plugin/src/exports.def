@@ -15,5 +15,6 @@ EXPORTS
     AFTXR_EyeProjection
     AFTXR_EyeDescription
     AFTXR_Recenter
+    AFTXR_ManualRecenterInput
     AFTXR_RenderedEye
     UnityRenderEvent
