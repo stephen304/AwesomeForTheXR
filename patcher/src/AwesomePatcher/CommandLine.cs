@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using AwesomePatcher.Core;
 
 namespace AwesomePatcher
 {
@@ -56,6 +57,11 @@ namespace AwesomePatcher
                 }
                 return Run(args[0], Path.GetFullPath(folder), assumeYes);
             }
+            catch (OperationCanceledException ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 3;
+            }
             catch (Exception ex)
             {
                 Console.Error.WriteLine(ex.Message);
@@ -85,7 +91,7 @@ namespace AwesomePatcher
                 }
             }
 
-            var service = PackagePayload.CreateService();
+            var service = GameFileWorker.CreateCoordinator();
             var status = service.Inspect(folder);
             Console.WriteLine(status.Message);
             if (command == "verify")
@@ -105,8 +111,14 @@ namespace AwesomePatcher
                     Console.Error.WriteLine("There is no verified installation to revert.");
                     return 1;
                 }
-                service.Revert(folder);
-                Console.WriteLine("Original game files restored.");
+                bool artworkConfirmed = service.Revert(folder);
+                if (!status.FilesOriginal) Console.WriteLine("Original game files restored.");
+                if (!artworkConfirmed)
+                {
+                    Console.WriteLine(PatchCoordinator.UnverifiedCleanup);
+                    if (status.FilesOriginal) return 1;
+                }
+                else if (status.FilesOriginal) Console.WriteLine("SteamVR artwork cleanup complete.");
             }
             return 0;
         }

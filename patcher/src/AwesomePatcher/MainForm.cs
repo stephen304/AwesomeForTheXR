@@ -9,17 +9,26 @@ namespace AwesomePatcher
 {
     internal sealed class MainForm : Form
     {
-        private readonly PatcherService service;
+        private readonly PatchCoordinator service;
         private readonly TextBox folder = new TextBox();
         private readonly Button browse = new Button { Text = "&Browse…", AutoSize = true };
-        private readonly Label status = new Label { AutoSize = false, Dock = DockStyle.Fill };
+        private readonly RichTextBox status = new RichTextBox
+        {
+            Dock = DockStyle.Fill,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = SystemColors.Control,
+            DetectUrls = false,
+            WordWrap = true,
+            ScrollBars = RichTextBoxScrollBars.Vertical
+        };
         private readonly Button patch = new Button { Text = "&Patch", Width = 90, AutoSize = true };
         private readonly Button revert = new Button { Text = "&Revert", Width = 90, AutoSize = true };
         private readonly Timer debounce = new Timer { Interval = 300 };
         private int selectionVersion;
         private bool changingFiles;
 
-        internal MainForm(PatcherService service, string selectedFolder)
+        internal MainForm(PatchCoordinator service, string selectedFolder)
         {
             this.service = service;
             Text = "AwesomePatcher";
@@ -47,9 +56,8 @@ namespace AwesomePatcher
             folder.AccessibleName = "Game folder";
             folder.Dock = DockStyle.Fill;
             status.Name = "FileStatus";
+            status.AccessibleName = "File status";
             status.AccessibleDescription = "Verification result for the selected game folder";
-            status.UseMnemonic = false;
-            status.TextAlign = ContentAlignment.MiddleLeft;
             status.Text = "Looking for the game folder…";
             var actions = new FlowLayoutPanel
             {
@@ -181,7 +189,7 @@ namespace AwesomePatcher
             debounce.Start();
         }
 
-        private async Task VerifyAsync(string operationError = null)
+        private async Task VerifyAsync(string operationMessage = null)
         {
             int version = selectionVersion;
             string path = folder.Text.Trim();
@@ -190,14 +198,14 @@ namespace AwesomePatcher
             {
                 PatchStatus result = await Task.Run(() => service.Inspect(path));
                 if (IsDisposed || version != selectionVersion) return;
-                status.Text = operationError == null ? result.Message : operationError + " " + result.Message;
+                status.Text = operationMessage == null ? result.Message : operationMessage + " " + result.Message;
                 patch.Enabled = result.CanPatch;
                 revert.Enabled = result.CanRevert;
             }
             catch (Exception ex)
             {
                 if (!IsDisposed && version == selectionVersion)
-                    status.Text = (operationError == null ? "" : operationError + " ") +
+                    status.Text = (operationMessage == null ? "" : operationMessage + " ") +
                         "Could not verify the game folder. " + ex.Message;
             }
         }
@@ -205,7 +213,7 @@ namespace AwesomePatcher
         private async Task ChangeFilesAsync(bool restore)
         {
             if (changingFiles) return;
-            if (restore && MessageBox.Show(this, "Restore both original executables and the game assembly, and remove the patch plugin, OpenXR loader and SteamVR artwork registration?", "Revert patch",
+            if (restore && MessageBox.Show(this, "Revert this game folder and remove its SteamVR artwork registration?", "Revert patch",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
 
@@ -215,25 +223,26 @@ namespace AwesomePatcher
             folder.Enabled = browse.Enabled = false;
             DisableActions();
             status.Text = restore ? "Restoring original files…" : "Applying patch…";
-            string error = null;
+            string operationMessage = null;
             try
             {
-                await Task.Run(() =>
+                if (restore)
                 {
-                    if (restore) service.Revert(path);
-                    else service.Patch(path);
-                });
+                    if (!await Task.Run(() => service.Revert(path)))
+                        operationMessage = PatchCoordinator.UnverifiedCleanup;
+                }
+                else await Task.Run(() => service.Patch(path));
             }
             catch (Exception ex)
             {
-                error = (restore ? "Revert failed. " : "Patch failed. ") + ex.Message;
+                operationMessage = ex.Message;
             }
             finally
             {
                 if (!IsDisposed && version == selectionVersion)
                 {
-                    status.Text = error ?? "Checking files…";
-                    await VerifyAsync(error);
+                    status.Text = operationMessage ?? "Checking files…";
+                    await VerifyAsync(operationMessage);
                     folder.Enabled = browse.Enabled = true;
                 }
                 changingFiles = false;

@@ -28,12 +28,13 @@ namespace AwesomePatcher.Core
 
         internal string Inspect(string installed, bool interrupted)
         {
-            string hash = PatchFiles.OptionalDigest(live);
-            if (hash == null || (!interrupted && hash != originalHash && hash != installed))
-                throw new InvalidDataException("Unexpected or missing executable: " + name);
-            var backup = PatchFiles.OptionalDigest(paths.Resolve(backupRelative));
-            if ((backup != null || installed != null) && backup != originalHash)
-                throw new InvalidDataException("Missing or changed original backup: " + name);
+            string hash = PatchFiles.Digest(live);
+            if (!interrupted && hash != originalHash && hash != installed)
+                throw new InvalidDataException("Unexpected executable contents: " + live);
+            string backupPath = paths.Resolve(backupRelative);
+            var backup = PatchFiles.Digest(backupPath, optional: installed == null);
+            if (backup != null && backup != originalHash)
+                throw new InvalidDataException("Changed original backup: " + backupPath);
             return hash;
         }
 
@@ -74,10 +75,10 @@ namespace AwesomePatcher.Core
                 (change.Before != originalHash && change.Before != oldInstalled) ||
                 (hash != change.Before && hash != change.After) ||
                 (newManifest && change.After != (currentInstalled ?? originalHash)) ||
-                PatchFiles.OptionalDigest(paths.Resolve(backupRelative)) != originalHash)
+                PatchFiles.Digest(paths.Resolve(backupRelative)) != originalHash)
                 throw new InvalidDataException("Interrupted update conflicts with " + name);
             if (hash != change.Before && change.Before != originalHash &&
-                PatchFiles.OptionalDigest(Snapshot(change.Before)) != change.Before)
+                PatchFiles.Digest(Snapshot(change.Before)) != change.Before)
                 throw new InvalidDataException("Cannot verify rollback snapshot: " + name);
         }
 

@@ -13,6 +13,7 @@ namespace AwesomePatcher
         [STAThread]
         private static int Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "--game-files") return GameFileWorker.Run(args);
             if (args.Length == 0) return RunGui(null);
             if (args.Length == 1 && !CommandLine.IsCommand(args[0]) &&
                 !args[0].StartsWith("-", StringComparison.Ordinal) && Directory.Exists(args[0]))
@@ -27,7 +28,7 @@ namespace AwesomePatcher
             FreeConsole();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(PackagePayload.CreateService(), selectedFolder));
+            Application.Run(new MainForm(GameFileWorker.CreateCoordinator(), selectedFolder));
             return 0;
         }
     }

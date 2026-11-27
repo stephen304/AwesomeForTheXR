@@ -13,7 +13,8 @@ namespace AwesomePatcher.Core
         private const string OpenXRFormat = "AwesomeForTheXR/openxr-install/4";
         private const string ArtworkFormat = "AwesomeForTheXR/openxr-install/5";
         private readonly bool hasLaunchers;
-        private readonly IArtworkCatalog artworkCatalog;
+        // Older development builds could retain an artwork file and a cleanup receipt on Revert.
+        private const string CleanupFormat = "AwesomeForTheXR/artwork-cleanup/1";
         private static LauncherFile Player(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Player, PlayerRecipe.PlayerOriginal);
         private static LauncherFile Forwarder(InstallPaths paths) => new LauncherFile(paths, PlayerRecipe.Helper, PlayerRecipe.HelperOriginal);
         private readonly string baseline, desired;
@@ -49,29 +50,24 @@ namespace AwesomePatcher.Core
             if (directory == null) return null;
             return name =>
             {
-                string path = Path.Combine(directory, name);
-                RequireFile(path, name);
-                return File.OpenRead(path);
+                string path = Path.GetFullPath(Path.Combine(directory, name));
+                try { return PatchFiles.ReadFile(path, File.OpenRead); }
+                catch (UnauthorizedAccessException ex) { throw new InvalidDataException(ex.Message, ex); }
             };
         }
 
-        internal PatcherService(string packageDirectory, IArtworkCatalog artworkCatalog)
-            : this(FromDirectory(packageDirectory ?? throw new ArgumentNullException(nameof(packageDirectory))), artworkCatalog) { }
-
-        private PatcherService(Func<string, Stream> openPackageFile, IArtworkCatalog artworkCatalog) : this(
+        private PatcherService(Func<string, Stream> openPackageFile) : this(
             GameAssemblyRecipe.OriginalHash, GameAssemblyRecipe.PatchedHash, GameAssemblyRecipe.Rewrite,
             openPackageFile ?? throw new ArgumentNullException(nameof(openPackageFile)))
         {
             hasLaunchers = true;
-            this.artworkCatalog = artworkCatalog ?? throw new ArgumentNullException(nameof(artworkCatalog));
         }
 
         public static PatcherService ForGame() => ForGame(Path.Combine(AppContext.BaseDirectory, "patch"));
 
-        public static PatcherService ForGame(string nativePackageDirectory) => new PatcherService(nativePackageDirectory, new SteamVrCatalog());
+        public static PatcherService ForGame(string nativePackageDirectory) => new PatcherService(FromDirectory(nativePackageDirectory));
 
-        public static PatcherService ForGamePackage(Func<string, Stream> openPackageFile) =>
-            new PatcherService(openPackageFile, new SteamVrCatalog());
+        public static PatcherService ForGamePackage(Func<string, Stream> openPackageFile) => new PatcherService(openPackageFile);
 
         public PatchStatus Inspect(string folder)
         {
@@ -91,26 +87,23 @@ namespace AwesomePatcher.Core
         {
             if (hasLaunchers)
             {
-                const string oculus = "Awesome_Data/Plugins/OculusPlugin.dll";
-                if (PatchFiles.OptionalDigest(paths.Resolve(oculus)) != "0C50EF33ACB01C8B1D3CF526CEE1A3FA64182EFE59F48CE3F3E3445AE883A9EF")
+                string oculus = paths.Resolve("Awesome_Data/Plugins/OculusPlugin.dll");
+                if (PatchFiles.Digest(oculus) != "0C50EF33ACB01C8B1D3CF526CEE1A3FA64182EFE59F48CE3F3E3445AE883A9EF")
                     throw new InvalidDataException("File does not match the supported build: " + oculus);
             }
 
-            RequireFile(paths.Live, InstallPaths.Assembly);
             string live = PatchFiles.Digest(paths.Live);
             var record = ReadRecord(paths);
-            bool interrupted = File.Exists(paths.Journal);
-            if (record != null || interrupted || File.Exists(paths.Original))
-            {
-                if (!File.Exists(paths.Original)) throw new InvalidDataException("Original backup is missing.");
-                if (PatchFiles.Digest(paths.Original) != baseline)
-                    throw new InvalidDataException("Original backup does not match the supported build.");
-            }
+            bool interrupted = PatchFiles.AttributesIfPresent(paths.Journal).HasValue;
+            string original = PatchFiles.Digest(paths.Original, optional: record == null && !interrupted);
+            if (original != null && original != baseline)
+                throw new InvalidDataException("Original backup does not match the supported build: " + paths.Original);
 
-            string native = PatchFiles.OptionalDigest(paths.Native);
+            string native = PatchFiles.Digest(paths.Native, optional: interrupted || record?.NativeSha256 == null);
             string player = hasLaunchers ? Player(paths).Inspect(record?.PlayerSha256, interrupted) : null;
             string helper = hasLaunchers ? Forwarder(paths).Inspect(record?.ForwarderSha256, interrupted) : null;
-            string loader = hasLaunchers ? PatchFiles.OptionalDigest(paths.Resolve(InstallPaths.LoaderName)) : null;
+            string loader = hasLaunchers ? PatchFiles.Digest(paths.Resolve(InstallPaths.LoaderName),
+                optional: interrupted || record?.LoaderSha256 == null) : null;
             if (!interrupted && loader != record?.LoaderSha256)
                 throw new InvalidDataException("Unrecognized, missing or modified OpenXR loader: " + InstallPaths.LoaderName);
             if (hasLaunchers && !interrupted) SteamVrArtwork.VerifyFile(paths, record);
@@ -127,7 +120,9 @@ namespace AwesomePatcher.Core
                 return new PatchStatus("Close Awesome to patch or revert.");
 
             if (interrupted)
-                return new PatchStatus("Interrupted update. Revert will recover the original files.", false, true);
+                return new PatchStatus("Interrupted update. Revert will recover the original files.", false, true, interrupted: true);
+            if (record?.Format == CleanupFormat)
+                return new PatchStatus("Game restored. Choose Revert to remove the retained artwork file.", canRevert: true);
             if (rewrite == null) return new PatchStatus("A compatible game patch is required.", false, record != null);
             string desiredNative;
             bool launchersCurrent = true;
@@ -144,16 +139,17 @@ namespace AwesomePatcher.Core
             }
             catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is UnauthorizedAccessException)
             {
-                return new PatchStatus("Patch package unavailable. " + ex.Message, false, record != null);
+                return new PatchStatus("Patch package unavailable. " + ex.Message, false, record != null, filesOriginal: record == null);
             }
             if (record != null && live == desired && native == desiredNative && launchersCurrent)
             {
-                if (hasLaunchers) return SteamVrArtwork.InstalledStatus(paths, record, artworkCatalog);
+                if (hasLaunchers && !SteamVrArtwork.IsCurrent(paths, record))
+                    return new PatchStatus("Game files match. Patch to install the SteamVR artwork manifest.", true, true);
                 return new PatchStatus("Files already match this patch.", canRevert: true, isCurrent: true);
             }
             if (record != null && live != baseline)
                 return new PatchStatus("Files match the previous patch. Update available.", true, true);
-            return new PatchStatus("Files match the supported game build.", true, record != null);
+            return new PatchStatus("Files match the supported game build.", true, record != null, filesOriginal: record == null);
         }
 
         private static bool GameIsRunning(string root)
@@ -179,11 +175,6 @@ namespace AwesomePatcher.Core
                 }
             }
             return false;
-        }
-
-        private static void RequireFile(string path, string description)
-        {
-            if (!File.Exists(path)) throw new FileNotFoundException("Missing file: " + description);
         }
 
         private byte[] ReadPackage(string name, out string digest)
@@ -217,6 +208,9 @@ namespace AwesomePatcher.Core
                 ((r.Format == OpenXRFormat || r.Format == ArtworkFormat) && PatchFiles.IsHash(r.LoaderSha256));
             bool launchers = hasLaunchers && launcherVersion && PatchFiles.IsHash(r.NativeSha256) &&
                 PatchFiles.IsHash(r.PlayerSha256) && PatchFiles.IsHash(r.ForwarderSha256) && PatchFiles.IsHash(r.StartupSha256);
+            if (r.Format == CleanupFormat && hasLaunchers && r.LoaderSha256 == null && r.NativeSha256 == null &&
+                r.PlayerSha256 == null && r.ForwarderSha256 == null && r.StartupSha256 == null && r.InstalledSha256 == baseline &&
+                PatchFiles.IsHash(r.ArtworkSha256)) return r;
             bool validArtwork = r.Format == ArtworkFormat ? PatchFiles.IsHash(r.ArtworkSha256) : r.ArtworkSha256 == null;
             if ((!legacy && !launchers) || !validArtwork)
                 throw new InvalidDataException("Unrecognized installation manifest version or payload hash.");
@@ -225,12 +219,13 @@ namespace AwesomePatcher.Core
 
         private InstallRecord ReadRecord(InstallPaths paths)
         {
-            return File.Exists(paths.Record) ? ParseRecord(paths, File.ReadAllBytes(paths.Record)) : null;
+            var bytes = PatchFiles.ReadFile(paths.Record, File.ReadAllBytes, optional: true);
+            return bytes == null ? null : ParseRecord(paths, bytes);
         }
 
         private PendingWrite ReadJournal(InstallPaths paths, string live, string native, InstallRecord current)
         {
-            var j = PatchFiles.Deserialize<PendingWrite>(File.ReadAllBytes(paths.Journal));
+            var j = PatchFiles.Deserialize<PendingWrite>(PatchFiles.ReadFile(paths.Journal, File.ReadAllBytes));
             if (j == null || j.PreviousAssembly == null || PatchFiles.Digest(j.PreviousAssembly) != j.BeforeHash ||
                 !PatchFiles.IsHash(j.AfterHash) || (live != j.BeforeHash && live != j.AfterHash))
                 throw new InvalidDataException("Interrupted update conflicts with existing files.");
@@ -269,18 +264,29 @@ namespace AwesomePatcher.Core
             return j;
         }
 
-        private void Change(string folder, bool revert)
+        internal void Change(string folder, bool revert, bool retry = false, bool secureDirectories = false)
         {
             var paths = new InstallPaths(folder, baseline);
-            CheckAllowed(Check(paths), revert);
-            Directory.CreateDirectory(paths.DirectoryPath);
+            var state = Check(paths);
+            if (!(retry && state.Interrupted && state.CanRevert)) CheckAllowed(state, revert);
+            using (var guard = secureDirectories ? new ElevatedDirectories() : null)
+            {
+                if (guard == null) Directory.CreateDirectory(paths.DirectoryPath);
+                else guard.AcquireForTransaction(paths);
+                ChangeLocked(paths, revert, retry);
+            }
+        }
+
+        private void ChangeLocked(InstallPaths paths, bool revert, bool retry)
+        {
             using (new FileStream(paths.Lock, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
             {
-                CheckAllowed(Check(paths), revert);
-                if (File.Exists(paths.Journal))
+                var state = Check(paths);
+                if (!(retry && state.Interrupted && state.CanRevert)) CheckAllowed(state, revert);
+                if (state.Interrupted)
                 {
                     RollBack(paths);
-                    if (!File.Exists(paths.Record) && PatchFiles.Digest(paths.Live) == baseline) return;
+                    if (revert && !File.Exists(paths.Record) && PatchFiles.Digest(paths.Live) == baseline) return;
                     CheckAllowed(Check(paths), revert);
                 }
                 var current = ReadRecord(paths);
@@ -338,7 +344,7 @@ namespace AwesomePatcher.Core
                     forwarderChange = Forwarder(paths).Prepare(current?.ForwarderSha256, forwarderBytes);
                 }
 
-                var artwork = hasLaunchers ? SteamVrArtwork.Prepare(paths, current, revert, artworkCatalog) : null;
+                var artwork = hasLaunchers ? SteamVrArtwork.Prepare(paths, current, revert) : null;
                 var transaction = new PendingWrite
                 {
                     Artwork = artwork, Player = playerChange, Forwarder = forwarderChange,
@@ -366,7 +372,7 @@ namespace AwesomePatcher.Core
                     }
                     if (revert) PatchFiles.Transition(paths.Native, beforeNativeHash, null, null);
                     if (revert && hasLaunchers) PatchFiles.Transition(loaderPath, beforeLoaderHash, null, null);
-                    artwork?.Apply(paths, artworkCatalog);
+                    artwork?.Apply(paths);
                     if (revert) File.Delete(paths.Record);
                     else
                     {
@@ -405,7 +411,7 @@ namespace AwesomePatcher.Core
             var j = ReadJournal(paths, live, native, ReadRecord(paths));
             if (hasLaunchers)
             {
-                j.Artwork?.Undo(paths, artworkCatalog);
+                j.Artwork?.Undo(paths);
                 var loaderPath = paths.Resolve(InstallPaths.LoaderName);
                 string loader = PatchFiles.OptionalDigest(loaderPath);
                 if (loader != j.BeforeLoaderHash)
@@ -415,8 +421,8 @@ namespace AwesomePatcher.Core
             }
             PatchFiles.Transition(paths.Native, native, j.BeforeNativeHash, j.PreviousNative);
             PatchFiles.Transition(paths.Live, live, j.BeforeHash, j.PreviousAssembly);
-            if (j.PreviousManifest == null) File.Delete(paths.Record);
-            else PatchFiles.Publish(paths.Record, j.PreviousManifest, File.Exists(paths.Record));
+            string previousRecord = j.PreviousManifest == null ? null : PatchFiles.Digest(j.PreviousManifest);
+            PatchFiles.Transition(paths.Record, PatchFiles.OptionalDigest(paths.Record), previousRecord, j.PreviousManifest);
             if (PatchFiles.Digest(paths.Live) != j.BeforeHash) throw new IOException("Rollback verification failed.");
             File.Delete(paths.Journal);
             if (hasLaunchers)

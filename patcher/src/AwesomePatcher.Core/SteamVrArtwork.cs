@@ -13,8 +13,6 @@ namespace AwesomePatcher.Core
 
         [DataMember] public byte[] Previous;
         [DataMember] public string After;
-        [DataMember] public bool PreviouslyRegistered;
-        [DataMember] public bool Register;
         private string Before => Previous == null ? null : PatchFiles.Digest(Previous);
 
         private static byte[] Load()
@@ -35,33 +33,17 @@ namespace AwesomePatcher.Core
             return digest;
         }
 
-        internal static PatchStatus InstalledStatus(InstallPaths paths, InstallRecord record, IArtworkCatalog catalog)
-        {
-            var path = paths.Resolve(Name);
-            if (record.ArtworkSha256 != Hash || PatchFiles.OptionalDigest(path) != Hash)
-                return new PatchStatus("Game files match. Patch to install the SteamVR artwork manifest.", true, true);
-            var state = catalog.Inspect(path);
-            bool ours = state.HasFlag(ArtworkRegistration.OwnedPath);
-            bool other = state.HasFlag(ArtworkRegistration.OtherProvider);
-            if (state.HasFlag(ArtworkRegistration.Available) && ((ours && other) || (!ours && !other)))
-                return new PatchStatus("Game files match. Patch to update SteamVR artwork registration.", true, true);
-            string message = other ? "SteamVR already has another entry for this game." :
-                ours ? "SteamVR artwork is registered." : "SteamVR was not found. Run Patch after installing SteamVR to register artwork.";
-            return new PatchStatus("Files already match this patch. " + message, canRevert: true, isCurrent: true);
-        }
+        internal static bool IsCurrent(InstallPaths paths, InstallRecord record) =>
+            record.ArtworkSha256 == Hash && PatchFiles.OptionalDigest(paths.Resolve(Name)) == Hash;
 
-        internal static SteamVrArtwork Prepare(InstallPaths paths, InstallRecord record, bool revert, IArtworkCatalog catalog)
+        internal static SteamVrArtwork Prepare(InstallPaths paths, InstallRecord record, bool revert)
         {
             var path = paths.Resolve(Name);
             var digest = VerifyFile(paths, record);
             if (revert && record?.ArtworkSha256 == null) return null;
-            var state = catalog.Inspect(path);
-            bool owned = state.HasFlag(ArtworkRegistration.OwnedPath);
-            var previous = digest == null ? null : File.ReadAllBytes(path);
             var change = new SteamVrArtwork {
-                Previous = previous, After = revert ? null : Hash, PreviouslyRegistered = owned,
-                Register = !revert && (state.HasFlag(ArtworkRegistration.Available)
-                    ? !state.HasFlag(ArtworkRegistration.OtherProvider) : owned)
+                Previous = digest == null ? null : File.ReadAllBytes(path),
+                After = revert ? null : Hash
             };
             if (change.Before != digest) throw new IOException("The SteamVR artwork file changed during verification.");
             return change;
@@ -71,26 +53,21 @@ namespace AwesomePatcher.Core
         {
             var live = PatchFiles.OptionalDigest(paths.Resolve(Name));
             if ((Before != null && Before != original?.ArtworkSha256) || (After != null && !PatchFiles.IsHash(After)) ||
-                (Register && After == null) || (live != Before && live != After))
+                (live != Before && live != After))
                 throw new InvalidDataException("Interrupted update conflicts with the SteamVR artwork manifest.");
         }
 
-        internal void Apply(InstallPaths paths, IArtworkCatalog catalog)
+        internal void Apply(InstallPaths paths)
         {
-            var path = paths.Resolve(Name);
-            if (!Register && PreviouslyRegistered) catalog.SetRegistered(path, false);
-            PatchFiles.Transition(path, Before, After, After == null ? null : Contents);
-            if (Register && !PreviouslyRegistered) catalog.SetRegistered(path, true);
+            PatchFiles.Transition(paths.Resolve(Name), Before, After, After == null ? null : Contents);
         }
 
-        internal void Undo(InstallPaths paths, IArtworkCatalog catalog)
+        internal void Undo(InstallPaths paths)
         {
             var path = paths.Resolve(Name);
-            if (Register != PreviouslyRegistered && !PreviouslyRegistered) catalog.SetRegistered(path, false);
             var live = PatchFiles.OptionalDigest(path);
             if (live != Before && live != After) throw new IOException("Artwork file changed during rollback.");
             PatchFiles.Transition(path, live, Before, Previous);
-            if (Register != PreviouslyRegistered && PreviouslyRegistered) catalog.SetRegistered(path, true);
         }
     }
 }

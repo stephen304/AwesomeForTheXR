@@ -29,7 +29,15 @@ namespace AwesomePatcher.IntegrationTests
             }
 
             var catalog = new TestArtworkCatalog();
-            var service = new PatcherService(package, catalog);
+            var gameFiles = PatcherService.ForGame(package);
+            int workerCalls = 0;
+            bool cancelWorker = false;
+            var service = new PatchCoordinator(gameFiles, catalog, (root, revert, retry) =>
+            {
+                workerCalls++;
+                if (cancelWorker) throw new OperationCanceledException();
+                gameFiles.Change(root, revert, retry, secureDirectories: ElevatedDirectories.NativeWindows && new DriveInfo(Path.GetPathRoot(root)).DriveFormat == "NTFS");
+            }, () => false);
             string art = Path.Combine(folder, SteamVrArtwork.Name);
             var expected = files.ToDictionary(f => f, f => Hash(File.ReadAllBytes(Path.Combine(folder, f))));
             string helperPath = Path.Combine(folder, helper);
@@ -59,13 +67,16 @@ namespace AwesomePatcher.IntegrationTests
             if (File.Exists(manifest) || File.Exists(loaderPath) || File.Exists(Path.Combine(folder, plugin)))
                 throw new InvalidOperationException("Failed transaction left an installation.");
 
-            catalog.FailAfterAdd = true;
+            catalog.FailAdd = true;
             try { service.Patch(folder); throw new InvalidOperationException("Expected a registration failure."); }
-            catch (IOException) { }
-            if (File.Exists(art) || File.Exists(manifest) || catalog.Registered)
-                throw new InvalidOperationException("Partial artwork installation was not rolled back.");
+            catch (IOException ex) when (ex.InnerException?.Message == "Simulated registration failure.") { }
+            if (!File.Exists(art) || !File.Exists(manifest) || catalog.Registered)
+                throw new InvalidOperationException("An artwork error undid the completed game-file installation.");
+            int afterInstall = workerCalls;
+            catalog.FailAdd = false;
 
             service.Patch(folder);
+            if (workerCalls != afterInstall) throw new InvalidOperationException("Repeated patch started a worker.");
             CheckStatus(service, folder, false, true, "launcher install");
             if (!catalog.Registered || !File.Exists(art)) throw new InvalidOperationException("Artwork was not installed.");
 
@@ -80,8 +91,12 @@ namespace AwesomePatcher.IntegrationTests
             service.Patch(folder);
             catalog.Registered = false;
             CheckStatus(service, folder, true, true, "lost SteamVR registration");
-            service.Patch(folder);
-            if (!catalog.Registered) throw new InvalidOperationException("Registration was not repaired.");
+            // Deny opening the transaction lock. Artwork repair must never start the file worker.
+            int beforeRepair = workerCalls;
+            using (File.Open(Path.Combine(folder, backup, "transaction.lock"), FileMode.Open, FileAccess.Read, FileShare.None))
+                service.Patch(folder);
+            if (!catalog.Registered || workerCalls != beforeRepair)
+                throw new InvalidOperationException("Registration repair touched the game-file transaction.");
 
             catalog.OtherProvider = true;
             CheckStatus(service, folder, true, true, "new Steam or third-party provider");
@@ -113,11 +128,24 @@ namespace AwesomePatcher.IntegrationTests
             File.WriteAllBytes(helperPath, FirstBuild);
             CheckStatus(service, folder, false, false, "unknown launcher edit");
             File.WriteAllBytes(helperPath, goodHelper);
-            var offline = new PatcherService(Path.Combine(temp, "absent package"), catalog);
+            int beforeFailedRevert = catalog.RemovalCalls;
+            cancelWorker = true;
+            try { service.Revert(folder); throw new InvalidOperationException("Expected cancellation."); }
+            catch (OperationCanceledException) { }
+            if (!catalog.Registered || !File.Exists(art) || catalog.RemovalCalls != beforeFailedRevert)
+                throw new InvalidOperationException("Cancelled Revert touched registration.");
+            cancelWorker = false;
+            var offlineFiles = PatcherService.ForGame(Path.Combine(temp, "absent package"));
+            var offline = new PatchCoordinator(offlineFiles, catalog, (root, revert, retry) =>
+            {
+                workerCalls++;
+                offlineFiles.Change(root, revert, retry);
+            }, () => false);
             CheckStatus(offline, folder, false, true, "offline revert");
             // Deny the final manifest removal, after the loader and plugin have both
             // been removed. Recovery must restore their exact bytes without a package.
             byte[] installedManifest = File.ReadAllBytes(manifest);
+            byte[] installedArtwork = File.ReadAllBytes(art);
             byte[] installedPlugin = File.ReadAllBytes(Path.Combine(folder, plugin));
             using (File.Open(manifest, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
@@ -126,12 +154,25 @@ namespace AwesomePatcher.IntegrationTests
                 catch (IOException) { failed = true; }
                 if (!failed) throw new InvalidOperationException("Expected a blocked manifest removal.");
             }
-            if (!catalog.Registered || !File.Exists(art)) throw new InvalidOperationException("Artwork rollback failed.");
+            if (!catalog.Registered || !File.Exists(art) || catalog.RemovalCalls != beforeFailedRevert)
+                throw new InvalidOperationException("Failed file restoration touched SteamVR registration.");
             CheckBytes(manifest, installedManifest, "manifest after interrupted revert");
             CheckBytes(loaderPath, loaderBytes, "loader after interrupted revert");
             CheckBytes(Path.Combine(folder, plugin), installedPlugin, "plugin after interrupted revert");
             CheckStatus(offline, folder, false, true, "offline recovery after interrupted revert");
-            offline.Revert(folder);
+            catalog.FailRemoval = true;
+            try { offline.Revert(folder); throw new InvalidOperationException("Expected pending artwork cleanup."); }
+            catch (IOException) { }
+            CheckStatus(offline, folder, false, true, "deferred artwork cleanup");
+            CheckBytes(Path.Combine(folder, player), File.ReadAllBytes(Path.Combine(folder, backup, player)), "game restored before cleanup");
+            if (File.Exists(art) || File.Exists(manifest) || catalog.LastRemovalHadFile || !catalog.Registered ||
+                !offlineFiles.Inspect(folder).FilesOriginal)
+                throw new InvalidOperationException("Deferred registration cleanup left files in the game folder.");
+            catalog.FailRemoval = false;
+            int beforeCleanup = workerCalls;
+            using (File.Open(Path.Combine(folder, backup, "transaction.lock"), FileMode.Open, FileAccess.Read, FileShare.None))
+                offline.Revert(folder);
+            if (workerCalls != beforeCleanup) throw new InvalidOperationException("Artwork cleanup started a worker.");
             if (catalog.Registered || File.Exists(art)) throw new InvalidOperationException("Revert left artwork behind.");
             foreach (var file in files)
                 if (Hash(File.ReadAllBytes(Path.Combine(folder, file))) != expected[file])
@@ -139,7 +180,40 @@ namespace AwesomePatcher.IntegrationTests
             if (File.Exists(manifest) || File.Exists(loaderPath) || File.Exists(Path.Combine(folder, plugin)) ||
                 Directory.GetFiles(Path.Combine(folder, backup), "*.previous").Length != 0)
                 throw new InvalidOperationException("Revert left installation or transaction files.");
-            Console.WriteLine("PASS: executable install, mid-install rollback, repair, tamper detection and offline revert.");
+            // Recover a release-5 journal left after the first install published its record.
+            service.Patch(folder);
+            var record = PatchFiles.Deserialize<InstallRecord>(File.ReadAllBytes(manifest));
+            var journal = new PendingWrite {
+                BeforeHash = expected[managed], AfterHash = record.InstalledSha256,
+                PreviousAssembly = File.ReadAllBytes(Path.Combine(folder, backup, "Assembly-CSharp.dll")),
+                AfterNativeHash = record.NativeSha256, AfterLoaderHash = record.LoaderSha256,
+                Player = new ExecutableChange { Before = expected[player], After = record.PlayerSha256 },
+                Forwarder = new ExecutableChange { Before = expected[helper], After = record.ForwarderSha256 },
+                Artwork = new SteamVrArtwork { After = record.ArtworkSha256 }
+            };
+            File.WriteAllBytes(Path.Combine(folder, backup, "pending.json"), PatchFiles.Serialize(journal));
+            catalog.FailRemoval = true;
+            try { service.Revert(folder); throw new InvalidOperationException("Expected deferred cleanup after recovery."); }
+            catch (IOException) { }
+            if (!gameFiles.Inspect(folder).FilesOriginal || File.Exists(art) || File.Exists(manifest) ||
+                !service.Inspect(folder).CanRevert || !catalog.Registered)
+                throw new InvalidOperationException("First-install recovery lost the stale registration retry.");
+            catalog.FailRemoval = false;
+            service.Revert(folder);
+            if (catalog.Registered || File.Exists(art) || File.Exists(manifest))
+                throw new InvalidOperationException("Recovered artwork could not be cleaned up.");
+
+            // Earlier development builds could leave these two files after otherwise restoring the game.
+            File.WriteAllBytes(art, installedArtwork);
+            File.WriteAllBytes(manifest, PatchFiles.Serialize(new InstallRecord {
+                Format = "AwesomeForTheXR/artwork-cleanup/1", OriginalSha256 = expected[managed], InstalledSha256 = expected[managed],
+                Backup = backup + "/Assembly-CSharp.dll", ArtworkSha256 = Hash(installedArtwork)
+            }));
+            catalog.Registered = true;
+            offline.Revert(folder);
+            if (File.Exists(art) || File.Exists(manifest) || catalog.Registered || catalog.LastRemovalHadFile)
+                throw new InvalidOperationException("Legacy cleanup receipt was not fully reverted.");
+            Console.WriteLine("PASS: executable install, mid-install rollback, artwork repair, tamper detection and offline revert.");
         }
 
         private static void CheckButtonBindings(ModuleDefinition module)

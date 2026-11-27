@@ -19,16 +19,40 @@ namespace AwesomePatcher.Core
             using (var data = new MemoryStream(bytes, false)) return Digest(data);
         }
 
-        internal static string Digest(string path)
+        internal static string Digest(string path, bool optional = false)
         {
-            using (var data = File.OpenRead(path)) return Digest(data);
+            using (var data = ReadFile(path, File.OpenRead, optional))
+                return data == null ? null : Digest(data);
         }
 
-        internal static string OptionalDigest(string path)
+        internal static string OptionalDigest(string path) => Digest(path, optional: true);
+
+        internal static T ReadFile<T>(string path, Func<string, T> read, bool optional = false) where T : class
         {
-            if (Directory.Exists(path)) throw new IOException("Expected a file at " + path);
-            return File.Exists(path) ? Digest(path) : null;
+            try { return read(path); }
+            catch (IOException ex) when (ex is FileNotFoundException || ex is DirectoryNotFoundException)
+            {
+                if (optional) return null;
+                throw new FileNotFoundException("Missing file: " + path, path, ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Windows also reports access denied when asked to open a directory as a file.
+                if (Directory.Exists(path)) throw new IOException("Expected a file at " + path, ex);
+                throw ReadDenied(path, ex);
+            }
         }
+
+        internal static FileAttributes? AttributesIfPresent(string path)
+        {
+            try { return File.GetAttributes(path); }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+            catch (UnauthorizedAccessException ex) { throw ReadDenied(path, ex); }
+        }
+
+        private static UnauthorizedAccessException ReadDenied(string path, UnauthorizedAccessException reason) =>
+            new UnauthorizedAccessException("Read access denied. Allow your account to read: " + path, reason);
 
         // Each replace is local to one volume. The transaction journal makes
         // each owned game file recoverable across replacements.
@@ -77,6 +101,11 @@ namespace AwesomePatcher.Core
             {
                 if (replace) File.Replace(temp, path, null);
                 else File.Move(temp, path);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // File.Replace can omit the failing path from its exception.
+                throw new UnauthorizedAccessException("Access denied publishing " + path + ".", ex);
             }
             finally { if (File.Exists(temp)) File.Delete(temp); }
         }
@@ -127,9 +156,11 @@ namespace AwesomePatcher.Core
 
         internal InstallPaths(string folder, string baseline)
         {
-            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-                throw new DirectoryNotFoundException("Select the Awesome game folder.");
+            if (string.IsNullOrWhiteSpace(folder)) throw new DirectoryNotFoundException("Select the Awesome game folder.");
             Root = Path.GetFullPath(folder);
+            var attributes = PatchFiles.AttributesIfPresent(Root);
+            if (!attributes.HasValue) throw new DirectoryNotFoundException("Missing game folder: " + Root);
+            if ((attributes.Value & FileAttributes.Directory) == 0) throw new IOException("Expected a game folder at " + Root);
             Live = Resolve(Assembly);
             Native = Resolve(NativeFile);
             Record = Resolve(Manifest);
@@ -151,13 +182,8 @@ namespace AwesomePatcher.Core
             foreach (var part in relative.Split('/'))
             {
                 path = Path.Combine(path, part);
-                try
-                {
-                    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                        throw new IOException("Linked file or directory requires review: " + relative);
-                }
-                catch (FileNotFoundException) { }
-                catch (DirectoryNotFoundException) { }
+                if ((PatchFiles.AttributesIfPresent(path).GetValueOrDefault() & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException("Linked file or directory requires review: " + relative);
             }
             return path;
         }

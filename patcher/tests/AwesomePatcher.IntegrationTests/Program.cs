@@ -1,7 +1,9 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using AwesomePatcher.Core;
 
@@ -25,6 +27,11 @@ namespace AwesomePatcher.IntegrationTests
                 TestMenuPointer();
                 TestInputContexts();
                 TestArtworkDiscovery(folder.FullName);
+                TestCoordinator(folder.FullName);
+                TestPartialPatchRetry(folder.FullName, decline: false);
+                TestPartialPatchRetry(folder.FullName, decline: true);
+                if (ElevatedDirectories.NativeWindows && new DriveInfo(Path.GetPathRoot(folder.FullName)).DriveFormat == "NTFS")
+                    TestElevatedDirectories(folder.FullName);
                 TestPatchCycle(folder.FullName);
                 TestNativePlugin(folder.FullName);
                 Console.WriteLine("PASS: managed/native install, update, interrupted transaction, verified revert and tamper detection.");
@@ -41,6 +48,82 @@ namespace AwesomePatcher.IntegrationTests
             }
         }
 
+        private static void TestElevatedDirectories(string temp)
+        {
+            var root = Directory.CreateDirectory(Path.Combine(temp, "directory guards")).FullName;
+            var paths = new InstallPaths(root, Hash(Original));
+            var managed = Directory.CreateDirectory(Path.GetDirectoryName(paths.Live)).FullName;
+            var plugins = Directory.CreateDirectory(Path.GetDirectoryName(paths.Native)).FullName;
+            var leaves = new[] { managed, plugins, paths.DirectoryPath };
+            using (var guard = new ElevatedDirectories())
+            {
+                guard.AcquireForTransaction(paths);
+                foreach (var dir in leaves)
+                    if (Directory.GetFiles(dir).Length != 1)
+                        throw new InvalidOperationException("Missing transaction directory anchor: " + dir);
+                foreach (var dir in leaves.Concat(new[] { root, Path.GetDirectoryName(managed) }))
+                {
+                    try { Directory.Move(dir, dir + ".moved"); throw new InvalidOperationException("Guard allowed a directory rename."); }
+                    catch (IOException) { }
+                }
+                string staged = Path.Combine(managed, "staged");
+                File.WriteAllText(staged, "atomic publication still works");
+                File.Move(staged, Path.Combine(managed, "published"));
+            }
+            if (!leaves.SelectMany(dir => Directory.GetFiles(dir)).SequenceEqual(new[] { Path.Combine(managed, "published") }))
+                throw new InvalidOperationException("Directory guard left a temporary file.");
+            string link = Path.Combine(root, "backups");
+            Directory.Move(link, Path.Combine(root, "original backups"));
+            var target = Directory.CreateDirectory(Path.Combine(root, "target")).FullName;
+            // A junction to another disposable directory must also be rejected as an ancestor.
+            var start = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/d /c mklink /j backups target")
+            {
+                WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+            };
+            using (var child = System.Diagnostics.Process.Start(start))
+            {
+                child.WaitForExit();
+                if (child.ExitCode != 0) throw new InvalidOperationException("Could not create the test junction.");
+            }
+            try
+            {
+                using (var guard = new ElevatedDirectories())
+                {
+                    try { guard.AcquireForTransaction(paths); throw new InvalidOperationException("Accepted a junction."); }
+                    catch (IOException ex) when (ex.HResult == ElevatedDirectories.CannotSecure) { }
+                }
+                if (Directory.EnumerateFileSystemEntries(target).Any())
+                    throw new InvalidOperationException("Created a directory through a junction.");
+            }
+            finally { Directory.Delete(link); }
+            Console.WriteLine("PASS: elevated directory locks, release and linked-directory refusal.");
+        }
+
+        private static void CheckReadError(PatcherService service, string folder, string path, string expected)
+        {
+            var status = service.Inspect(folder);
+            CheckStatus(status, false, false, expected);
+            if (!status.Message.Contains(expected) || !status.Message.Contains(path))
+                throw new InvalidOperationException("Expected " + expected + " for " + path + ", got: " + status.Message);
+        }
+
+        private static void CheckDeniedRead(PatcherService service, string folder, string path, FileSystemRights rights)
+        {
+            using (var identity = WindowsIdentity.GetCurrent())
+            {
+                var deny = new FileSystemAccessRule(identity.User, rights, AccessControlType.Deny);
+                var acl = File.GetAccessControl(path, AccessControlSections.Access);
+                acl.AddAccessRule(deny);
+                File.SetAccessControl(path, acl);
+                try { CheckReadError(service, folder, path, "Read access denied"); }
+                finally
+                {
+                    acl.RemoveAccessRuleSpecific(deny);
+                    File.SetAccessControl(path, acl);
+                }
+            }
+        }
+
         private static void TestPatchCycle(string folder)
         {
             var managed = Directory.CreateDirectory(Path.Combine(folder, "Awesome_Data", "Managed"));
@@ -48,7 +131,10 @@ namespace AwesomePatcher.IntegrationTests
             var first = Recipe(FirstBuild);
             var second = Recipe(SecondBuild);
 
-            CheckStatus(first, folder, false, false, "missing target");
+            CheckReadError(first, folder, target, "Missing file");
+            Directory.CreateDirectory(target);
+            try { CheckReadError(first, folder, target, "Expected a file"); }
+            finally { Directory.Delete(target); }
             File.WriteAllBytes(target, Original);
             CheckStatus(PatcherService.ForGame(), folder, false, false, "synthetic game must be unsupported");
             CheckStatus(first, folder, true, false, "clean fixture");
@@ -72,6 +158,15 @@ namespace AwesomePatcher.IntegrationTests
 
             var backup = Directory.GetFiles(Path.Combine(folder, "backups"), "*", SearchOption.AllDirectories)
                 .Single(path => File.ReadAllBytes(path).SequenceEqual(Original));
+            File.Delete(backup);
+            CheckReadError(second, folder, backup, "Missing file");
+            File.WriteAllBytes(backup, Original);
+            if (ElevatedDirectories.NativeWindows && new DriveInfo(Path.GetPathRoot(folder)).DriveFormat == "NTFS")
+            {
+                CheckDeniedRead(second, folder, backup, FileSystemRights.ReadData);
+                CheckDeniedRead(second, folder, Path.Combine(folder, InstallPaths.Manifest),
+                    FileSystemRights.ReadAttributes | FileSystemRights.ReadData);
+            }
             File.WriteAllBytes(backup, foreign);
             CheckStatus(second, folder, false, false, "invalid pristine backup");
             ExpectRefusal(() => second.Revert(folder), "revert with invalid pristine backup");
@@ -174,7 +269,16 @@ namespace AwesomePatcher.IntegrationTests
         private static void CheckStatus(PatcherService service, string folder, bool canPatch,
             bool canRevert, string scenario)
         {
-            var status = service.Inspect(folder);
+            CheckStatus(service.Inspect(folder), canPatch, canRevert, scenario);
+        }
+
+        private static void CheckStatus(PatchCoordinator service, string folder, bool canPatch, bool canRevert, string scenario)
+        {
+            CheckStatus(service.Inspect(folder), canPatch, canRevert, scenario);
+        }
+
+        private static void CheckStatus(PatchStatus status, bool canPatch, bool canRevert, string scenario)
+        {
             if (status.CanPatch != canPatch || status.CanRevert != canRevert ||
                 string.IsNullOrWhiteSpace(status.Message))
                 throw new InvalidOperationException(scenario + ": unexpected status: " + status.Message +
