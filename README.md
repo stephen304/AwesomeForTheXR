@@ -1,6 +1,6 @@
 # AwesomeForTheXR
 
-This is an AI-assisted patch that adds OpenXR support to the arcade base-jumping game AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome.
+This is an AI-assisted patch that adds OpenXR support to the arcade base-jumping game [AaaaaAAaaaAAAaaAAAAaAAAAA!!! for the Awesome (available on Steam)](https://store.steampowered.com/app/15560/AaaaaAAaaaAAAaaAAAAaAAAAA_for_the_Awesome/).
 
 > [!NOTE]
 > Also check out [eliwss0's VR remaster](https://github.com/eliwss0/V-AaaaaAAaaaAAAaaAAAAaAAAAAR), which goes further and also includes hand and item models in game!
